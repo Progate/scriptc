@@ -125,6 +125,7 @@ import { cjsLexedExportsOfFile, cjsVisibleNames } from "./cjs-syntax.js";
 import {
   ambientDtsPath,
   domExceptionDtsPath,
+  webWorkerDtsPath,
   fallbackDtsPath,
   fallbackModulesNamedIn,
   isFallbackDtsPath,
@@ -1089,13 +1090,24 @@ function erasedSpecifier(specifier: ts.Node): boolean {
  * program's files, like the fallback module roots. */
 function nodeTypesSupplementRoots7(program: ts.Program, host: ts.Ts7Host): string[] {
   const names = program.getSourceFileNames();
+  const roots: string[] = [];
+  // @types/node 22 declares the MessagePort global only as a value whose
+  // type comes from the DOM library when a program has one.
+  if (
+    names.some(
+      (name) =>
+        isNodeTypesPath(name) &&
+        /\bvar\s+MessagePort:\s*typeof\s+globalThis\s+extends\b/.test(host.sourceText(name) ?? ""),
+    )
+  )
+    roots.push(webWorkerDtsPath());
   const shims = tsgoPath(packageShimRoot()) + "/";
-  if (!names.some((name) => tsgoPath(name).startsWith(shims))) return [];
+  if (!names.some((name) => tsgoPath(name).startsWith(shims))) return roots;
   for (const name of names) {
     if (isNodeTypesPath(name) && /\bvar\s+DOMException\b/.test(host.sourceText(name) ?? ""))
-      return [];
+      return roots;
   }
-  return [domExceptionDtsPath()];
+  return [...roots, domExceptionDtsPath()];
 }
 
 /** Program roots hidden behind canonical createRequire bindings. tsgo

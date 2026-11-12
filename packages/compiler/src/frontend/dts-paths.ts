@@ -74,6 +74,7 @@ export function compilerOwnedFileName(file: string): string | null {
     overridesDtsPath(),
     fallbackDtsPath(),
     domExceptionDtsPath(),
+    webWorkerDtsPath(),
   ]) {
     if (path === declaration) return `scriptc:${path.slice(path.lastIndexOf("/") + 1)}`;
   }
@@ -115,6 +116,14 @@ export function fallbackDtsPath(): string {
  * declaration themselves. A standard-library file, like them. */
 export function domExceptionDtsPath(): string {
   return declarationPath("scriptc-dom-exception.d.ts");
+}
+
+/** Path of the shipped declarations of the worker-scope globals (the
+ * MessagePort interface, RequestInit's cache) for a program whose own
+ * @types/node declares MessagePort only as a value (program.ts,
+ * nodeTypesSupplementRoots7). A standard-library file, like them. */
+export function webWorkerDtsPath(): string {
+  return declarationPath("scriptc-web-worker.d.ts");
 }
 
 const FALLBACK_MODULE_DIRECTORY = "node-fallback";
@@ -252,6 +261,7 @@ export function isFallbackDtsPath(file: string): boolean {
   return (
     path === fallbackDtsPath() ||
     path === domExceptionDtsPath() ||
+    path === webWorkerDtsPath() ||
     path.startsWith(fallbackModuleRoot() + "/")
   );
 }
