@@ -65,6 +65,7 @@ import { tryLowerExpression } from "./try-lower-expression.js";
 import { hasRuntimeStatics, runtimeStaticDefines } from "../class-runtime-statics.js";
 import { declareContextLocal } from "../function-context.js";
 import { keyedFieldTarget, keyedFieldWrite, saveKeyedFieldKey } from "./keyed-field-targets.js";
+import { unionFieldUpdateAccess } from "./union-fields.js";
 
 /** Read-modify-write updates read the member first: an unassigned
  * deferred-init receiver throws Node's member-read TypeError. */
@@ -194,7 +195,13 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
       const raw = lowerer.lowerExpr(expr.operand);
 
       if (raw.type.kind === "bigint") {
-        return { kind: "libCall", fn: "bigint.neg", args: [raw], type: BIGINT_T, loc };
+        return {
+          kind: "libCall",
+          fn: "bigint.neg",
+          args: [raw],
+          type: BIGINT_T,
+          loc,
+        };
       }
       // Unary minus is ToNumeric: a JavaScript operand whose coercion hook
       // can answer a BigInt keeps the BigInt negation. A Date keeps its
@@ -232,7 +239,13 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
     case ts.SyntaxKind.PlusToken: {
       const raw = lowerer.lowerExpr(expr.operand);
       if (raw.type.kind === "dyn") {
-        return { kind: "libCall", fn: "dyn.toNumberCoerce", args: [raw], type: F64, loc };
+        return {
+          kind: "libCall",
+          fn: "dyn.toNumberCoerce",
+          args: [raw],
+          type: F64,
+          loc,
+        };
       }
       // `+sym`: ToNumber of a Symbol throws "Cannot convert a Symbol value
       // to a number", which the runtime's checked conversion raises. Only a
@@ -240,20 +253,38 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
       // error still fences the TypeScript form.
       if (raw.type.kind === "symbol") {
         const boxed: IrExpr = { kind: "dynFrom", value: raw, type: DYN, loc };
-        return { kind: "libCall", fn: "dyn.toNumberCoerce", args: [boxed], type: F64, loc };
+        return {
+          kind: "libCall",
+          fn: "dyn.toNumberCoerce",
+          args: [boxed],
+          type: F64,
+          loc,
+        };
       }
       // A union of primitives (`+match[1]` over `string | undefined`): ToNumber
       // over the boxed value, as for a checked-dynamic operand.
       if (coercedUnion(lowerer, raw.type)) {
         const boxed: IrExpr = { kind: "dynFrom", value: raw, type: DYN, loc };
-        return { kind: "libCall", fn: "dyn.toNumberCoerce", args: [boxed], type: F64, loc };
+        return {
+          kind: "libCall",
+          fn: "dyn.toNumberCoerce",
+          args: [boxed],
+          type: F64,
+          loc,
+        };
       }
       // Unary + is ToNumber; on an already-number operand it's identity,
       // and a STRING operand runs the runtime's ECMA-exact StringToNumber
       // (num.fromString — Number(aString)'s lowering, scr_string.c).
 
       if (raw.type.kind === "string") {
-        return { kind: "libCall", fn: "num.fromString", args: [raw], type: F64, loc };
+        return {
+          kind: "libCall",
+          fn: "num.fromString",
+          args: [raw],
+          type: F64,
+          loc,
+        };
       }
       if (raw.type.kind === "bool") return booleanToNumber(raw, loc);
       // A Date's number hint answers its time value.
@@ -291,7 +322,13 @@ export function lowerPrefixUnary(lowerer: Lowerer, expr: ts.PrefixUnaryExpressio
       // `~x`: ToInt32, complement, back to f64 (JS-exact, incl. NaN → -1).
       const raw = lowerer.lowerExpr(expr.operand);
       if (raw.type.kind === "bigint") {
-        return { kind: "libCall", fn: "bigint.not", args: [raw], type: BIGINT_T, loc };
+        return {
+          kind: "libCall",
+          fn: "bigint.not",
+          args: [raw],
+          type: BIGINT_T,
+          loc,
+        };
       }
       if (raw.type.kind === "dyn")
         return {
@@ -460,7 +497,13 @@ export function lowerIncDec(
         );
       const index = save(
         rawIndex.type.kind === "dyn" && isJsSourceFile(ts.getSourceFileOfNode(expr))
-          ? { kind: "libCall", fn: "dyn.toNumberCoerce", args: [rawIndex], type: F64, loc }
+          ? {
+              kind: "libCall",
+              fn: "dyn.toNumberCoerce",
+              args: [rawIndex],
+              type: F64,
+              loc,
+            }
           : rawIndex,
         "%incrementIndex",
       );
@@ -574,7 +617,13 @@ export function lowerIncDec(
             ),
         "%incrementKey",
       );
-      const read: IrExpr = { kind: "dynKeyGet", value: receiver, key, type: DYN, loc };
+      const read: IrExpr = {
+        kind: "dynKeyGet",
+        value: receiver,
+        key,
+        type: DYN,
+        loc,
+      };
       return finish(checkedNumber ? lowerer.coerceInto(access, read, F64) : read, (value) => ({
         kind: "exprStmt",
         expr: {
@@ -660,7 +709,13 @@ export function lowerIncDecTarget(
         {
           kind: "varDecl",
           localId: old.id,
-          init: { kind: "libCall", fn: "dyn.toNumeric", args: [read], type: DYN, loc },
+          init: {
+            kind: "libCall",
+            fn: "dyn.toNumeric",
+            args: [read],
+            type: DYN,
+            loc,
+          },
           loc,
         },
         {
@@ -678,7 +733,12 @@ export function lowerIncDecTarget(
           },
           loc,
         },
-        { kind: "assign", localId: target.id, value: varRef(next.id, DYN, loc), loc },
+        {
+          kind: "assign",
+          localId: target.id,
+          value: varRef(next.id, DYN, loc),
+          loc,
+        },
       ],
       result: varRef(prefix ? next.id : old.id, DYN, loc),
       type: DYN,
@@ -763,14 +823,24 @@ export function lowerIncDecTarget(
     return {
       kind: "seqExpr",
       stmts: [
-        { kind: "varDecl", localId: old.id, init: varRef(target.id, BIGINT_T, loc), loc },
+        {
+          kind: "varDecl",
+          localId: old.id,
+          init: varRef(target.id, BIGINT_T, loc),
+          loc,
+        },
         {
           kind: "varDecl",
           localId: next.id,
           init: bigintStep(op, varRef(old.id, BIGINT_T, loc), loc),
           loc,
         },
-        { kind: "assign", localId: target.id, value: varRef(next.id, BIGINT_T, loc), loc },
+        {
+          kind: "assign",
+          localId: target.id,
+          value: varRef(next.id, BIGINT_T, loc),
+          loc,
+        },
       ],
       result: varRef(prefix ? next.id : old.id, BIGINT_T, loc),
       type: BIGINT_T,
@@ -886,7 +956,14 @@ export function fieldSetStmt(
           kind: "seqExpr",
           stmts: [
             ...(receiver
-              ? [{ kind: "varDecl" as const, localId: receiver.id, init: deferredSlot, loc }]
+              ? [
+                  {
+                    kind: "varDecl" as const,
+                    localId: receiver.id,
+                    init: deferredSlot,
+                    loc,
+                  },
+                ]
               : []),
             { kind: "varDecl", localId: stored.id, init: value, loc },
           ],
@@ -908,7 +985,13 @@ export function fieldSetStmt(
               result.type,
               loc,
             ),
-            else_: { kind: "seqExpr", stmts: [write], result, type: result.type, loc },
+            else_: {
+              kind: "seqExpr",
+              stmts: [write],
+              result,
+              type: result.type,
+              loc,
+            },
             type: result.type,
             loc,
           },
@@ -945,14 +1028,26 @@ export function fieldSetStmt(
   if (target.container === "errorStackLimit") {
     return {
       kind: "exprStmt",
-      expr: { kind: "libCall", fn: "error.stackLimitSet", args: [value], type: VOID, loc },
+      expr: {
+        kind: "libCall",
+        fn: "error.stackLimitSet",
+        args: [value],
+        type: VOID,
+        loc,
+      },
       loc,
     };
   }
   if (target.container === "errorCause") {
     return {
       kind: "exprStmt",
-      expr: { kind: "libCall", fn: "error.setCause", args: [target.obj, value], type: VOID, loc },
+      expr: {
+        kind: "libCall",
+        fn: "error.setCause",
+        args: [target.obj, value],
+        type: VOID,
+        loc,
+      },
       loc,
     };
   }
@@ -1030,7 +1125,13 @@ export function fieldSetStmt(
     };
     return {
       kind: "exprStmt",
-      expr: { kind: "callValue", callee: closure, args: [value], type: VOID, loc },
+      expr: {
+        kind: "callValue",
+        callee: closure,
+        args: [value],
+        type: VOID,
+        loc,
+      },
       loc,
     };
   }
@@ -1174,7 +1275,13 @@ export function lowerFieldCompoundValue(
       return {
         kind: "seqExpr",
         stmts: [staticPrivate.brand],
-        result: { kind: "assignExpr", localId: target.id, value, type: target.type, loc },
+        result: {
+          kind: "assignExpr",
+          localId: target.id,
+          value,
+          type: target.type,
+          loc,
+        },
         type: target.type,
         loc,
       };
@@ -1183,7 +1290,12 @@ export function lowerFieldCompoundValue(
   const body: IrStmt[] = [];
   const save = (value: IrExpr, name: string): IrExpr => {
     const local = lowerer.declareHiddenLocal(name, value.type);
-    body.push({ kind: "varDecl", localId: local.id, init: value, loc: value.loc });
+    body.push({
+      kind: "varDecl",
+      localId: local.id,
+      init: value,
+      loc: value.loc,
+    });
     return varRef(local.id, value.type, value.loc);
   };
   // A CHECKED-DYNAMIC receiver (`context.actual++` — test/common's call
@@ -1281,7 +1393,12 @@ export function lowerFieldCompoundValue(
         rhsNode !== null &&
         lowerer.mapTypeOf(lowerer.typeOf(access))?.kind === "string"
       ) {
-        const old: IrExpr = { kind: "dynCheck", value: read, type: STRING, loc };
+        const old: IrExpr = {
+          kind: "dynCheck",
+          value: read,
+          type: STRING,
+          loc,
+        };
         const appended = concatOperand(lowerer, rhs, rhsNode);
         const value = save(
           { kind: "strConcat", left: old, right: appended, type: STRING, loc },
@@ -1299,7 +1416,13 @@ export function lowerFieldCompoundValue(
           },
           loc,
         });
-        return { kind: "seqExpr", stmts: body, result: value, type: value.type, loc };
+        return {
+          kind: "seqExpr",
+          stmts: body,
+          result: value,
+          type: value.type,
+          loc,
+        };
       }
       const numericRhs: IrExpr =
         rhs.type.kind === "dyn"
@@ -1331,7 +1454,13 @@ export function lowerFieldCompoundValue(
         },
         loc,
       });
-      return { kind: "seqExpr", stmts: body, result: value, type: value.type, loc };
+      return {
+        kind: "seqExpr",
+        stmts: body,
+        result: value,
+        type: value.type,
+        loc,
+      };
     }
   }
   // The ordinary field target first: every write that resolved before keeps
@@ -1342,6 +1471,10 @@ export function lowerFieldCompoundValue(
       ? (lowerer.fieldTarget(access) ?? assertedUnionFieldTarget(lowerer, access))
       : (symbolFieldTarget(lowerer, access) ?? keyedFieldTarget(lowerer, access, true));
   const target = targetOf();
+  if (!target && ts.isPropertyAccessExpression(access)) {
+    const viaUnion = lowerUnionFieldCompound(lowerer, access, op, rhsNode, loc);
+    if (viaUnion) return viaUnion;
+  }
   if (!target)
     lowerer.unsupported("SC1090", access, "compound assignment to unsupported field targets");
   checkDeferredMemberReceiver(lowerer, target, access);
@@ -1375,7 +1508,12 @@ export function lowerFieldCompoundValue(
       undefined,
       undefined,
     );
-    body.push({ kind: "varDecl", localId: old.id, init: fieldRead, loc: fieldRead.loc });
+    body.push({
+      kind: "varDecl",
+      localId: old.id,
+      init: fieldRead,
+      loc: fieldRead.loc,
+    });
     read = varRef(old.id, STRING, fieldRead.loc);
   } else {
     read = save(fieldRead, "%compoundOld");
@@ -1413,9 +1551,22 @@ export function lowerFieldCompoundValue(
   const bigintValue = rhsNode ? bigintCompoundValue(op, read, rhs, loc) : null;
   if (op === "+" && read.type.kind === "string") {
     appended = concatOperand(lowerer, rhs, rhsNode ?? access);
-    value = { kind: "strConcat", left: read, right: appended, type: STRING, loc };
+    value = {
+      kind: "strConcat",
+      left: read,
+      right: appended,
+      type: STRING,
+      loc,
+    };
   } else if (numericRead.type.kind === "f64" && numericRhs.type.kind === "f64") {
-    value = { kind: "bin", op, left: numericRead, right: numericRhs, type: F64, loc };
+    value = {
+      kind: "bin",
+      op,
+      left: numericRead,
+      right: numericRhs,
+      type: F64,
+      loc,
+    };
   } else if (bigintValue) {
     value = bigintValue;
   } else if (
@@ -1457,12 +1608,82 @@ export function lowerFieldCompoundValue(
       { kind: "assign", localId: oldId, value: concat, loc },
       lowerer.fieldSetStmt(target, oldRef(), loc, access),
     );
-    return { kind: "seqExpr", stmts: body, result: oldRef(), type: STRING, loc };
+    return {
+      kind: "seqExpr",
+      stmts: body,
+      result: oldRef(),
+      type: STRING,
+      loc,
+    };
   }
   const result = save(value, "%compoundResult");
   body.push(
     lowerer.fieldSetStmt(target, lowerer.coerceInto(access, result, target.fieldType), loc, access),
   );
+  return { kind: "seqExpr", stmts: body, result, type: result.type, loc };
+}
+
+/** `u.f op= v` where `u` is a union of records or classes that all declare
+ * `f` as a data field of one type (unionFieldUpdateAccess): the receiver
+ * evaluates once, the arm's slot is read, the right side evaluates, and the
+ * result is written to the same object's slot. Numbers, string appends and
+ * bigints combine as on a single record's field; null for every other
+ * operand pairing (the caller keeps its refusal). */
+function lowerUnionFieldCompound(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+  op: CompoundOp,
+  rhsNode: ts.Expression | null,
+  loc: SrcLoc,
+): IrExpr | null {
+  const union = unionFieldUpdateAccess(lowerer, access);
+  if (!union) return null;
+  const { fieldType } = union;
+  if (fieldType.kind !== "f64" && fieldType.kind !== "string" && fieldType.kind !== "bigint")
+    return null;
+  if (fieldType.kind === "string" && op !== "+") return null;
+  const body: IrStmt[] = [...union.stmts];
+  const save = (value: IrExpr, name: string): IrExpr => {
+    const local = lowerer.declareHiddenLocal(name, value.type);
+    body.push({
+      kind: "varDecl",
+      localId: local.id,
+      init: value,
+      loc: value.loc,
+    });
+    return varRef(local.id, value.type, value.loc);
+  };
+  const read = save(union.read(), "%compoundOld");
+  const rhs = save(
+    rhsNode ? lowerer.lowerExpr(rhsNode) : { kind: "numLit", value: 1, type: F64, loc },
+    "%compoundRhs",
+  );
+  let value: IrExpr | null = null;
+  if (fieldType.kind === "string") {
+    value = {
+      kind: "strConcat",
+      left: read,
+      right: concatOperand(lowerer, rhs, rhsNode ?? access),
+      type: STRING,
+      loc,
+    };
+  } else if (fieldType.kind === "bigint") {
+    value = bigintCompoundValue(op, read, rhs, loc);
+  } else {
+    const numericRhs = lowerOperatorNumber(lowerer, rhs, loc);
+    if (numericRhs.type.kind === "f64")
+      value = {
+        kind: "bin",
+        op,
+        left: read,
+        right: numericRhs,
+        type: F64,
+        loc,
+      };
+  }
+  if (value === null) compoundUnsupported(lowerer, access, op, fieldType, rhs.type);
+  const result = save(value, "%compoundResult");
+  body.push(union.write(result));
   return { kind: "seqExpr", stmts: body, result, type: result.type, loc };
 }
 

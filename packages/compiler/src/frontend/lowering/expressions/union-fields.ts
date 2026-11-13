@@ -6,6 +6,7 @@ import { narrowStoredClassValue } from "../class-unions.js";
 import { markSloppyRecordWrites } from "../frozen-records.js";
 import {
   BOOL,
+  VOID,
   type IrExpr,
   type IrStmt,
   type IrType,
@@ -30,7 +31,11 @@ function unionFieldArm(lowerer: Lowerer, arm: IrType, name: string): UnionFieldA
   if (arm.kind === "record") {
     const field = lowerer.shapes.get(arm.shapeId)?.fields.find((f) => f.name === name);
     return field
-      ? { receiver: arm, type: field.type, ...(field.optional === true ? { optional: true } : {}) }
+      ? {
+          receiver: arm,
+          type: field.type,
+          ...(field.optional === true ? { optional: true } : {}),
+        }
       : null;
   }
   if (arm.kind === "object") {
@@ -76,7 +81,14 @@ function unionFieldRead(
   loc: IrExpr["loc"],
 ): IrExpr {
   return armMemberRead(
-    { kind: "unionNarrow", unionId, tag, value: union, type: field.receiver, loc },
+    {
+      kind: "unionNarrow",
+      unionId,
+      tag,
+      value: union,
+      type: field.receiver,
+      loc,
+    },
     field,
     name,
     loc,
@@ -97,7 +109,10 @@ export function narrowedUnionView(
   site: ts.Node,
   receiver: IrExpr,
   loc: SrcLoc,
-): { value: IrExpr; arm: (IrType & { kind: "record" | "object" }) | null } | null {
+): {
+  value: IrExpr;
+  arm: (IrType & { kind: "record" | "object" }) | null;
+} | null {
   if (receiver.type.kind !== "union") return null;
   const fromId = receiver.type.unionId;
   const siteT = lowerer.mapTypeOf(lowerer.typeOf(site));
@@ -209,7 +224,15 @@ export function lowerUnionFieldRead(
   for (let tag = fields.length - 2; tag >= 0; tag--) {
     dispatch = {
       kind: "ternary",
-      cond: { kind: "unionIsTag", unionId, tag, value: objectRef, negated: false, type: BOOL, loc },
+      cond: {
+        kind: "unionIsTag",
+        unionId,
+        tag,
+        value: objectRef,
+        negated: false,
+        type: BOOL,
+        loc,
+      },
       then: lowerer.coerceToExpected(
         unionFieldRead(unionId, tag, objectRef, fields[tag]!, name, loc),
         type,
@@ -219,7 +242,12 @@ export function lowerUnionFieldRead(
       loc,
     };
   }
-  const init: IrStmt = { kind: "varDecl", localId: object.id, init: receiver, loc };
+  const init: IrStmt = {
+    kind: "varDecl",
+    localId: object.id,
+    init: receiver,
+    loc,
+  };
   return { kind: "seqExpr", stmts: [init], result: dispatch, type, loc };
 }
 
@@ -375,7 +403,13 @@ function unionFieldWriteInto(
             };
       // A sloppy-mode write to a frozen record leaves it unchanged.
       if (write.kind === "recordSet") markSloppyRecordWrites(lowerer, write, access);
-      branch = { kind: "seqExpr", stmts: [write], result, type: result.type, loc };
+      branch = {
+        kind: "seqExpr",
+        stmts: [write],
+        result,
+        type: result.type,
+        loc,
+      };
     } else {
       branch = nodeThrowExpr(
         1,
@@ -405,7 +439,13 @@ function unionFieldWriteInto(
             loc,
           };
   }
-  return { kind: "seqExpr", stmts: body, result: dispatch, type: result.type, loc };
+  return {
+    kind: "seqExpr",
+    stmts: body,
+    result: dispatch,
+    type: result.type,
+    loc,
+  };
 }
 
 /** `delete u.f` on a union receiver: each record arm declares `f` as an
@@ -431,7 +471,11 @@ export function lowerUnionFieldDelete(
   if (!arms || arms.length < 2) return null;
   const name = access.name.text;
   const loc = locOf(access);
-  const fields: { arm: IrType & { kind: "record" }; type: IrType; optional?: true }[] = [];
+  const fields: {
+    arm: IrType & { kind: "record" };
+    type: IrType;
+    optional?: true;
+  }[] = [];
   for (const arm of arms) {
     if (arm.kind !== "record" || lowerer.shapes.get(arm.shapeId)?.tuple) return null;
     const field = unionFieldArm(lowerer, arm, name);
@@ -450,7 +494,14 @@ export function lowerUnionFieldDelete(
     if (absent === null) return [];
     const write: IrStmt = {
       kind: "recordSet",
-      obj: { kind: "unionNarrow", unionId, tag, value: objectRef, type: field.arm, loc },
+      obj: {
+        kind: "unionNarrow",
+        unionId,
+        tag,
+        value: objectRef,
+        type: field.arm,
+        loc,
+      },
       shapeId: field.arm.shapeId,
       field: name,
       value: absent,
@@ -533,13 +584,176 @@ export function lowerUnionTupleRead(
     if (!then) return null;
     dispatch = {
       kind: "ternary",
-      cond: { kind: "unionIsTag", unionId, tag, value: objectRef, negated: false, type: BOOL, loc },
+      cond: {
+        kind: "unionIsTag",
+        unionId,
+        tag,
+        value: objectRef,
+        negated: false,
+        type: BOOL,
+        loc,
+      },
       then,
       else_: dispatch,
       type,
       loc,
     };
   }
-  const init: IrStmt = { kind: "varDecl", localId: object.id, init: receiver, loc };
+  const init: IrStmt = {
+    kind: "varDecl",
+    localId: object.id,
+    init: receiver,
+    loc,
+  };
   return { kind: "seqExpr", stmts: [init], result: dispatch, type, loc };
+}
+
+/** The read and the write of a data field that every arm of a union
+ * receiver declares at ONE storage type (`inode.refs += 1` over a
+ * discriminated union of records), for a compound assignment or update.
+ * The receiver is lowered and held once (`stmts`); `read` dispatches over
+ * its tag to the arm's own slot, and `write` stores into the same object's
+ * slot, so aliases observe the mutation. A nullish arm reads and writes as
+ * Node's TypeError. Null for receivers that are not such unions, for arms
+ * that do not declare the field as data, and for arms declaring it at
+ * different types (the caller keeps its refusal). */
+export function unionFieldUpdateAccess(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+): {
+  stmts: IrStmt[];
+  fieldType: IrType;
+  read: () => IrExpr;
+  write: (value: IrExpr) => IrStmt;
+} | null {
+  if (access.questionDotToken || ts.isPrivateIdentifier(access.name)) return null;
+  if (isJsSourceFile(ts.getSourceFileOfNode(access))) return null;
+  let receiver = unionWriteReceiver(lowerer, access);
+  if (!receiver || receiver.type.kind !== "union") return null;
+  const name = access.name.text;
+  const loc = locOf(access);
+  const view = (value: IrExpr): (UnionFieldArm | null)[] | null => {
+    if (value.type.kind !== "union") return null;
+    const arms = lowerer.unions.get(value.type.unionId)?.arms;
+    if (!arms?.length) return null;
+    const fields: (UnionFieldArm | null)[] = [];
+    for (const arm of arms) {
+      if (arm.kind === "undefinedT" || arm.kind === "nullT") {
+        fields.push(null);
+        continue;
+      }
+      const field = unionFieldArm(lowerer, arm, name);
+      if (!field) return null;
+      fields.push(field);
+    }
+    const present = fields.filter((f): f is UnionFieldArm => f !== null);
+    if (present.length === 0) return null;
+    return present.every((f) => typeEquals(f.type, present[0]!.type)) ? fields : null;
+  };
+  let fields = view(receiver);
+  if (fields === null) {
+    // Arms the checker ruled out at this site (see lowerUnionFieldWrite).
+    const narrowed = narrowedUnionView(
+      lowerer,
+      withoutParenthesesAssertions(access.expression),
+      receiver,
+      loc,
+    );
+    if (!narrowed?.value || narrowed.arm) return null;
+    receiver = narrowed.value;
+    fields = view(receiver);
+    if (fields === null) return null;
+  }
+  if (receiver.type.kind !== "union") return null;
+  const unionId = receiver.type.unionId;
+  const arms = lowerer.unions.get(unionId)!.arms;
+  const fieldType = fields.find((f) => f !== null)!.type;
+  const object = lowerer.declareHiddenLocal("%unionUpdateObject", receiver.type);
+  const objectRef = (): IrExpr => varRef(object.id, object.type, loc);
+  const nullish = (tag: number, verb: "reading" | "setting"): string =>
+    `Cannot ${verb === "reading" ? "read" : "set"} properties of ${arms[tag]!.kind === "nullT" ? "null" : "undefined"} (${verb} '${name}')`;
+  const dispatch = <T>(
+    branch: (tag: number, field: UnionFieldArm | null) => T,
+    join: (cond: IrExpr, then: T, else_: T) => T,
+  ): T => {
+    let out = branch(fields.length - 1, fields[fields.length - 1]!);
+    for (let tag = fields.length - 2; tag >= 0; tag--) {
+      const cond: IrExpr = {
+        kind: "unionIsTag",
+        unionId,
+        tag,
+        value: objectRef(),
+        negated: false,
+        type: BOOL,
+        loc,
+      };
+      out = join(cond, branch(tag, fields[tag]!), out);
+    }
+    return out;
+  };
+  return {
+    stmts: [{ kind: "varDecl", localId: object.id, init: receiver, loc }],
+    fieldType,
+    read: () =>
+      dispatch<IrExpr>(
+        (tag, field) =>
+          field
+            ? unionFieldRead(unionId, tag, objectRef(), field, name, loc)
+            : nodeThrowExpr(1, "", nullish(tag, "reading"), fieldType, loc),
+        (cond, then, else_) => ({
+          kind: "ternary",
+          cond,
+          then,
+          else_,
+          type: fieldType,
+          loc,
+        }),
+      ),
+    write: (value) =>
+      dispatch<IrStmt>(
+        (tag, field) => {
+          if (!field)
+            return {
+              kind: "exprStmt",
+              expr: nodeThrowExpr(1, "", nullish(tag, "setting"), VOID, loc),
+              loc,
+            };
+          const obj: IrExpr = {
+            kind: "unionNarrow",
+            unionId,
+            tag,
+            value: objectRef(),
+            type: field.receiver,
+            loc,
+          };
+          const write: IrStmt =
+            field.receiver.kind === "record"
+              ? {
+                  kind: "recordSet",
+                  obj,
+                  shapeId: field.receiver.shapeId,
+                  field: name,
+                  value,
+                  loc,
+                }
+              : {
+                  kind: "fieldSet",
+                  obj,
+                  className: field.receiver.className,
+                  field: name,
+                  value,
+                  loc,
+                };
+          if (write.kind === "recordSet") markSloppyRecordWrites(lowerer, write, access);
+          return write;
+        },
+        (cond, then, else_) => ({
+          kind: "if",
+          cond,
+          then: [then],
+          else_: [else_],
+          loc,
+        }),
+      ),
+  };
 }
