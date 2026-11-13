@@ -2729,6 +2729,52 @@ export function lowerPresenceOperand(lowerer: Lowerer, node: ts.Expression): IrE
   );
 }
 
+/** The absence probe of a key read through a string-keyed dictionary
+ * (`Record<string, V>`, `{ [key: string]: V }`) that the program keeps
+ * checked-dynamic (a dictionary type that receives existing objects, see
+ * class-protocols.ts markDictionaryViews). The checker types the read as
+ * `V`, but the key may be missing and JavaScript answers undefined: the
+ * ordinary read converts the member to `V` and throws on that undefined.
+ * Here the member stays checked-dynamic, so the guard or default around the
+ * probe sees the undefined. Null for a declared member, an optional chain
+ * (it already reads checked-dynamic), a dictionary of `any` or `unknown`
+ * values (its reads are checked-dynamic already) and any receiver that is
+ * not checked-dynamic. */
+function checkedDictionaryProbe(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression | ts.ElementAccessExpression,
+): IrExpr | null {
+  if (expr.questionDotToken || hasOptionalChainGuard(expr.expression, lowerer)) return null;
+  const receiver = lowerer.typeOf(expr.expression);
+  if (lowerer.mapTypeOf(receiver)?.kind !== "dyn") return null;
+  if (receiver.isUnionType() || (receiver.flags & ts.TypeFlags.Object) === 0) return null;
+  const index = lowerer.checker
+    .getIndexInfosOfType(receiver)
+    .find((info) => (info.keyType.flags & ts.TypeFlags.String) !== 0);
+  if (!index || index.type.flags & (ts.TypeFlags.Any | ts.TypeFlags.Unknown)) return null;
+  if (ts.isPropertyAccessExpression(expr)) {
+    if (lowerer.checker.getPropertyOfType(receiver, expr.name.text)) return null;
+  } else {
+    const literal = recordKeyLiteralText(expr.argumentExpression);
+    if (literal !== null && lowerer.checker.getPropertyOfType(receiver, literal)) return null;
+    if ((lowerer.typeOf(expr.argumentExpression).flags & ts.TypeFlags.StringLike) === 0)
+      return null;
+  }
+  // The receiver evaluates before the key, as in JavaScript.
+  const value = lowerer.lowerExpr(expr.expression);
+  if (value.type.kind !== "dyn") return null;
+  const key = ts.isPropertyAccessExpression(expr)
+    ? strLit(expr.name.text, locOf(expr.name))
+    : lowerer.lowerExpr(expr.argumentExpression);
+  return {
+    kind: "dynKeyGet",
+    key: key.type.kind === "string" ? key : lowerer.coerceToExpected(key, DYN),
+    value,
+    type: DYN,
+    loc: locOf(expr),
+  };
+}
+
 /** A keyed read used only to observe absence (`if (map[k])`, or the left
  * side of `||`/`??`). JavaScript answers undefined for missing record keys
  * and array indices even when noUncheckedIndexedAccess is disabled. Keep
@@ -2750,6 +2796,8 @@ export function lowerAbsenceProbe(lowerer: Lowerer, node: ts.Expression): IrExpr
     // Namespace members are bindings, not fields of a runtime namespace
     // object. Their ordinary read already preserves optional storage.
     if (!expr.questionDotToken && nsMemberIdentOf(lowerer, expr)) return null;
+    const dictionary = checkedDictionaryProbe(lowerer, expr);
+    if (dictionary) return dictionary;
     const target = lowerer.fieldTarget(expr);
     if (
       target?.container === "class" &&
@@ -2785,6 +2833,9 @@ export function lowerAbsenceProbe(lowerer: Lowerer, node: ts.Expression): IrExpr
     };
   }
   if (!ts.isElementAccessExpression(expr)) return null;
+
+  const dictionary = checkedDictionaryProbe(lowerer, expr);
+  if (dictionary) return dictionary;
 
   const cachedModule = lowerRequireCacheElement(lowerer, expr);
   if (cachedModule) return cachedModule;

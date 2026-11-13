@@ -751,9 +751,15 @@ export function lowerNullishPair(
     // Both sides live in the checked-dynamic tree — the right converts through
     // the usual boundary and evaluates lazily in its branch; a default
     // with no dyn representation keeps the fence.
+    // The default is checked-dynamic too, so a default that can be absent
+    // (a missing dictionary key, `a ?? env.USER ?? b`) keeps its undefined
+    // for the next default instead of converting it to its declared type.
     const right =
       dynamicArrayOperand(lowerer, expr.right, expr) ??
-      lowerer.coerceToExpected(lowerer.lowerExpr(expr.right), DYN);
+      lowerer.coerceToExpected(
+        lowerAbsenceProbe(lowerer, expr.right) ?? lowerer.lowerExpr(expr.right),
+        DYN,
+      );
     if (right.type.kind !== "dyn") {
       lowerer.unsupported(
         "SC1100",
