@@ -1266,6 +1266,7 @@ webstream.install
 webstream.instanceOf
 worker.isMainThread
 worker.isMarkedUntransferable
+worker.isMessagePort
 worker.markUntransferable
 worker.root
 worker.threadId

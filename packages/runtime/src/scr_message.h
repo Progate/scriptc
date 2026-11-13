@@ -32,6 +32,9 @@ typedef struct {
   void (*release)(ScrChannel *channel);
 } ScrMessagePortOps;
 extern const ScrMessagePortOps *scr_message_port_ops;
+/* `value instanceof MessagePort`: false until the worker events unit
+ * installs the port operations (no port exists before). Borrows. */
+bool scr_worker_is_message_port(ScrDyn *value);
 ScrDyn *scr_message_decode(const ScrMessage *message);
 void scr_message_free(ScrMessage *message);
 

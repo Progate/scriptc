@@ -99,6 +99,7 @@ const LIB_MODE_REFUSED_PREFIXES: readonly [string, string][] = [
   ["icu.", "the Intl surface at the default locale (ICU data and locale state are ambient)"],
   ["worker.markUntransferable", "native worker threads"],
   ["worker.isMarkedUntransferable", "native worker threads"],
+  ["worker.isMessagePort", "native worker threads"],
   ["worker.broadcastChannel", "native worker threads"],
 ];
 

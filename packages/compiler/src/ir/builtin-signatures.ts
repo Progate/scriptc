@@ -1803,6 +1803,9 @@ function buildLibFnSignatures() {
      * (scr_worker_events.c; the value borrowed). */
     "worker.markUntransferable": { argTypes: [DYN], result: VOID },
     "worker.isMarkedUntransferable": { argTypes: [DYN], result: BOOL },
+    /** `value instanceof MessagePort` (scr_message.c; the value borrowed):
+     * false in a program that never made a port. */
+    "worker.isMessagePort": { argTypes: [DYN], result: BOOL },
     /** markAsUncloneable(value) (scr_json.c; the value borrowed). */
     "dyn.markUncloneable": { argTypes: [DYN], result: VOID },
     /** before new Worker() with the stdout or stderr option: links the stream

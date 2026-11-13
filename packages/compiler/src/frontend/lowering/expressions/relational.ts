@@ -900,6 +900,15 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
         loc,
       };
     }
+    // `value instanceof MessagePort`: whether the value is a port of a
+    // worker_threads or global MessageChannel (the runtime's port handle).
+    if (
+      stdlibGlobalNameOf(lowerer, expr.right) === "MessagePort" ||
+      (rhsBuiltin?.module === "worker_threads" && rhsBuiltin.member === "MessagePort")
+    ) {
+      const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
+      return { kind: "libCall", fn: "worker.isMessagePort", args: [value], type: BOOL, loc };
+    }
     // A built-in class that has no test of its own above: name it, and
     // what a program can test instead.
     const builtinClass =

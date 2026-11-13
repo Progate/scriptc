@@ -6,6 +6,11 @@
 
 const ScrMessagePortOps *scr_message_port_ops = NULL;
 
+bool scr_worker_is_message_port(ScrDyn *value) {
+  return value && value->kind == SCR_DYN_HANDLE && scr_message_port_ops &&
+         scr_message_port_ops->is_port(value);
+}
+
 typedef struct {
   const char *key;
   size_t length;

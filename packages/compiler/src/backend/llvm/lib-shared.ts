@@ -1462,6 +1462,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "worker.getEnvironmentData": "scr_worker_get_environment_data",
   "worker.markUntransferable": "scr_worker_mark_untransferable",
   "worker.isMarkedUntransferable": "scr_worker_is_marked_untransferable",
+  "worker.isMessagePort": "scr_worker_is_message_port",
   "dyn.markUncloneable": "scr_mark_uncloneable",
   "stream.workerStdio": "scr_stream_worker_stdio",
   "worker.broadcastChannel": "scr_worker_broadcast_channel",
