@@ -606,7 +606,7 @@ function refusalCall(lowerer: Lowerer, display: string, node: ts.Node, loc: SrcL
  * process start, so the origin is the wall clock minus that clock, taken
  * once and kept: every read answers the same number, and
  * `timeOrigin + now()` is the wall clock, as in Node. */
-function performanceTimeOrigin(lowerer: Lowerer, loc: SrcLoc): IrExpr {
+export function performanceTimeOrigin(lowerer: Lowerer, loc: SrcLoc): IrExpr {
   const helper = "%perf.timeOrigin";
   if (lowerer.liftedFnNamed(helper) === undefined) {
     const storage = `%g.${helper}`;

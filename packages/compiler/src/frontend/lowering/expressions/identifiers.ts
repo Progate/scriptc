@@ -154,6 +154,29 @@ function isJsWidenedBinding(lowerer: Lowerer, expr: ts.Identifier): boolean {
   return symbol !== null && symbol !== undefined && lowerer.jsWidenedBindings.has(symbol);
 }
 
+/** Whether the checker types this read of a scalar-union binding as one
+ * arm of it while the binding's declared type maps to the stored union
+ * itself: the declaration admits every arm the storage can hold, so the
+ * flow narrowing at the use is proven by the program's own guards. A
+ * binding the checker declares narrower than its storage keeps the union
+ * read (the stored arms the checker does not know about stay visible). */
+function declaredScalarUnionNarrowed(
+  lowerer: Lowerer,
+  expr: ts.Identifier,
+  symbol: ts.Symbol | null | undefined,
+  stored: IrType,
+): boolean {
+  if (!symbol || stored.kind !== "union") return false;
+  const declared = lowerer.mapTypeOf(lowerer.checker.getTypeOfSymbol(symbol));
+  if (!declared || !typeEquals(declared, stored)) return false;
+  const narrowed = lowerer.mapTypeOf(lowerer.typeOf(expr));
+  return (
+    narrowed !== null &&
+    (narrowed.kind === "f64" || narrowed.kind === "string" || narrowed.kind === "bool") &&
+    lowerer.armTag(stored.unionId, narrowed) >= 0
+  );
+}
+
 export function lowerIdentifierExpr(lowerer: Lowerer, expr: ts.Identifier, loc: SrcLoc): IrExpr {
   if (lowerer.isStdlibGlobal(expr, "console")) {
     return { kind: "libCall", fn: "console.native", args: [], type: DYN, loc };
@@ -382,6 +405,14 @@ export function lowerIdentifierExpr(lowerer: Lowerer, expr: ts.Identifier, loc: 
         lowerer.ctx.captureBySymbol.get(symbol) === local ||
         runtimeOptionalRoot !== local);
     if (arithmetic && !runtimeOptionalUseOf(expr)) {
+      // A binding whose declared type already admits every stored arm
+      // (`const p: number | string = f()`) narrows like any other union:
+      // a typeof guard or an early return proves the arm this use reads.
+      if (declaredScalarUnionNarrowed(lowerer, expr, symbol, local.type))
+        return lowerer.maybeNarrow(
+          { kind: "varRef", localId: local.id, type: local.type, loc },
+          expr,
+        );
       return { kind: "varRef", localId: local.id, type: local.type, loc };
     }
     if (active || captured) {

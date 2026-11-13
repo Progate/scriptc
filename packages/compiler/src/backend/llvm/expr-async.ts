@@ -204,6 +204,22 @@ export function emitIntrinsicExpr(host: LlvmEmitterContext, e: ExprOf<"intrinsic
         }
         return out;
       }
+      if (e.name === "promise.raceArray") {
+        // Promise.race over an array value: the runtime joins each element
+        // in index order with the same-type copy adapter, BORROWING the
+        // array (a frame-owned temp).
+        if (e.type.kind !== "promise")
+          throw new InternalCompilerError("llvm emitter bug: promise.raceArray type");
+        const entries = e.args[0]!;
+        if (entries.type.kind !== "array" || entries.type.elem.kind !== "promise")
+          throw new InternalCompilerError("llvm emitter bug: promise.raceArray argument");
+        const ps = host.emitExpr(entries);
+        const adapter = host.raceAdapterFor(entries.type.elem.inner, e.type.inner);
+        host.declare(`declare ptr @scr_promise_race_array(ptr, ptr)`);
+        const t = B.tmp();
+        B.line(`${t} = call ptr @scr_promise_race_array(ptr ${ps.name}, ptr @${adapter})`);
+        return host.own({ name: t, type: e.type });
+      }
       if (e.name === "promise.race") {
         // A fresh result promise + one race_join per entry: each entry
         // settles it from a reaction job (first job wins), queued when the

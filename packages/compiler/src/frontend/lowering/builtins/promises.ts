@@ -845,6 +845,235 @@ function lowerTupleAllSettled(
   return stmts.length === 0 ? all : { kind: "seqExpr", stmts, result: all, type: resultT, loc };
 }
 
+/** The entries of `Promise.race(argument)`: an array literal whose elements
+ * are expressions, or spreads of array literals and of conditionals between
+ * array literals (`...(deadline >= 0 ? [timer] : [])`). `fixed` holds the
+ * elements before the first conditional spread; each conditional spread
+ * then contributes the elements of its two arms, followed by the plain
+ * elements up to the next one. Null for any other shape. */
+type RaceAlternatives = {
+  fixed: ts.Expression[];
+  spreads: {
+    condition: ts.Expression;
+    whenTrue: ts.Expression[];
+    whenFalse: ts.Expression[];
+    after: ts.Expression[];
+  }[];
+};
+
+function raceEntryAlternatives(argNode: ts.Expression): RaceAlternatives | null {
+  if (!ts.isArrayLiteralExpression(argNode)) return null;
+  const literalElements = (node: ts.Expression): ts.Expression[] | null => {
+    let inner = node;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    if (!ts.isArrayLiteralExpression(inner)) return null;
+    if (inner.elements.nodes.some((el) => ts.isSpreadElement(el) || ts.isOmittedExpression(el)))
+      return null;
+    return [...inner.elements.nodes];
+  };
+  const result: RaceAlternatives = { fixed: [], spreads: [] };
+  const push = (nodes: ts.Expression[]): void => {
+    const last = result.spreads[result.spreads.length - 1];
+    (last ? last.after : result.fixed).push(...nodes);
+  };
+  for (const el of argNode.elements.nodes) {
+    if (ts.isOmittedExpression(el)) return null;
+    if (!ts.isSpreadElement(el)) {
+      push([el]);
+      continue;
+    }
+    const plain = literalElements(el.expression);
+    if (plain) {
+      push(plain);
+      continue;
+    }
+    let inner = el.expression;
+    while (ts.isParenthesizedExpression(inner)) inner = inner.expression;
+    if (!ts.isConditionalExpression(inner)) return null;
+    const whenTrue = literalElements(inner.whenTrue);
+    const whenFalse = literalElements(inner.whenFalse);
+    if (!whenTrue || !whenFalse) return null;
+    result.spreads.push({ condition: inner.condition, whenTrue, whenFalse, after: [] });
+  }
+  // Two conditional spreads already make four races; more is a list the
+  // program builds at run time, which this lowering does not model.
+  if (result.spreads.length > 2) return null;
+  return result;
+}
+
+/** `Promise.race([a, ...(c ? [x] : [y]), b])`: the elements before the
+ * conditional evaluate first, into temporaries, then the condition, then
+ * the arm it picks and the elements after it — JavaScript's order for the
+ * array literal — and each arm races its own fixed list. An arm that leaves
+ * the list empty would race nothing (a promise that never settles), which
+ * this lowering refuses. */
+function lowerConditionalRace(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  expanded: RaceAlternatives,
+  loc: SrcLoc,
+): IrExpr {
+  const stmts: IrStmt[] = [];
+  const staged: { node: ts.Expression; value: IrExpr | null }[] = expanded.fixed.map((node) => {
+    const value = lowerer.lowerExpr(node);
+    const temp = lowerer.declareHiddenLocal("%raceEntry", value.type);
+    stmts.push({ kind: "varDecl", localId: temp.id, init: value, loc: locOf(node) });
+    return { node, value: varRef(temp.id, value.type, locOf(node)) };
+  });
+  const build = (
+    prefix: { node: ts.Expression; value: IrExpr | null }[],
+    rest: RaceAlternatives["spreads"],
+  ): IrExpr => {
+    if (rest.length === 0) {
+      if (prefix.length === 0)
+        lowerer.noLowering(
+          "Promise.race over this argument shape",
+          call,
+          "a conditional spread that can leave the entries empty races nothing; keep one entry outside it",
+        );
+      return lowerRaceEntries(lowerer, call, prefix, loc);
+    }
+    const [spread, ...more] = rest;
+    // Later elements and conditions evaluate inside each arm, after the
+    // condition and the arm's own elements, so they are lowered per arm.
+    const arm = (nodes: ts.Expression[]): IrExpr => {
+      if (more.length === 0)
+        return build(
+          [...prefix, ...[...nodes, ...spread!.after].map((node) => ({ node, value: null }))],
+          more,
+        );
+      const armStmts: IrStmt[] = [];
+      const armStaged = [...nodes, ...spread!.after].map((node) => {
+        const value = lowerer.lowerExpr(node);
+        const temp = lowerer.declareHiddenLocal("%raceEntry", value.type);
+        armStmts.push({ kind: "varDecl", localId: temp.id, init: value, loc: locOf(node) });
+        return { node, value: varRef(temp.id, value.type, locOf(node)) as IrExpr | null };
+      });
+      const result = build([...prefix, ...armStaged], more);
+      return armStmts.length === 0
+        ? result
+        : { kind: "seqExpr", stmts: armStmts, result, type: result.type, loc };
+    };
+    const cond = lowerer.lowerCondition(spread!.condition);
+    const then = arm(spread!.whenTrue);
+    const else_ = arm(spread!.whenFalse);
+    if (!typeEquals(then.type, else_.type))
+      lowerer.noLowering(
+        "Promise.race with this combined result type",
+        call,
+        "the entries' value types must combine into a representable union",
+      );
+    return { kind: "ternary", cond, then, else_, type: then.type, loc };
+  };
+  const result = build(staged, expanded.spreads);
+  return stmts.length === 0 ? result : { kind: "seqExpr", stmts, result, type: result.type, loc };
+}
+
+/** One `Promise.race` over a fixed list of entries. An entry with a value
+ * was already evaluated (into a temporary); the rest lower here, in order.
+ * See lowerPromiseStaticCall for the result type rules. */
+function lowerRaceEntries(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  racers: { node: ts.Expression; value: IrExpr | null }[],
+  loc: SrcLoc,
+): IrExpr {
+  // A Promise<never> entry (the deadline idiom: `new Promise<never>((_,
+  // reject) => setTimeout(reject, ms))`) can only reject, so it races
+  // under any result type; its inner type maps to void.
+  const neverEntry = (el: ts.Expression): boolean => {
+    const t = lowerer.typeOf(el);
+    const arg =
+      ts.symbolNameOf(t.getSymbol()) === "Promise"
+        ? lowerer.checker.getTypeArguments(t as ts.TypeReference)[0]
+        : undefined;
+    return arg !== undefined && (arg.flags & ts.TypeFlags.Never) !== 0;
+  };
+  const elements = racers.map((racer) => racer.node);
+  let combined = lowerer.mapTypeOf(lowerer.typeOf(call));
+  let lowered: IrExpr[] | null = null;
+  if (combined?.kind !== "promise") {
+    // The checker's combined type has no representation (an 'any'
+    // element array such as events.once's any[], or 'void | any[]'): the
+    // result takes the one type the entries that can fulfill share, or
+    // else 'unknown' when each of them widens into it.
+    lowered = racers.map((racer) => racer.value ?? lowerer.lowerExpr(racer.node));
+    const fulfilling = lowered.filter((_, i) => !neverEntry(elements[i]!));
+    const first = fulfilling[0]?.type;
+    const dynResult: IrType & { kind: "promise" } = { kind: "promise", inner: DYN };
+    if (first?.kind === "promise" && fulfilling.every((e) => typeEquals(e.type, first))) {
+      combined = first;
+    } else if (
+      fulfilling.length > 0 &&
+      fulfilling.every(
+        (e) => e.type.kind === "promise" && lowerer.promisePayloadWidens(e.type, dynResult),
+      )
+    ) {
+      combined = dynResult;
+    } else {
+      lowerer.noLowering(
+        "Promise.race with this combined result type",
+        call,
+        "the entries' value types must combine into a representable union",
+      );
+    }
+  }
+  const resultT = combined;
+  const resultArms =
+    resultT.inner.kind === "union" ? (lowerer.unions.get(resultT.inner.unionId)?.arms ?? []) : null;
+  const compatible = (inner: IrType): boolean => {
+    if (typeEquals(inner, resultT.inner)) return true;
+    if (!resultArms) return false;
+    // A Promise<void> entry fulfills with undefined, which the result
+    // holds when the checker folded `void` into its undefined arm.
+    if (inner.kind === "void") return resultArms.some((a) => a.kind === "undefinedT");
+    if (inner.kind === "union") {
+      const arms = lowerer.unions.get(inner.unionId)?.arms ?? [];
+      return arms.every((a) => resultArms.some((b) => typeEquals(a, b)));
+    }
+    return resultArms.some((a) => typeEquals(a, inner));
+  };
+  const entries = elements.map((el, i) => {
+    const made = lowered?.[i] ?? racers[i]!.value ?? lowerer.lowerExpr(el);
+    // An entry whose static type has a thenable part joins as the promise
+    // PromiseResolve makes of it.
+    let entry = promiseResolveThenable(lowerer, el, made, locOf(el)) ?? made;
+    // A promise the program holds as a checked-dynamic value (the result of
+    // a method called through an interface the program implements several
+    // ways): the checked conversion to the promise type the checker gives
+    // the entry, which throws on anything else.
+    if (entry.type.kind === "dyn") {
+      const declared = lowerer.mapTypeOf(lowerer.typeOf(el));
+      if (declared?.kind === "promise") {
+        const converted = lowerer.coerceToExpected(entry, declared);
+        if (converted.type.kind === "promise") entry = converted;
+      }
+    }
+    if (entry.type.kind !== "promise") {
+      lowerer.noLowering(
+        "Promise.race over non-promise entries",
+        el,
+        "JS would resolve plain values — wrap them: new Promise((r) => r(v))",
+      );
+    }
+    if (!compatible(entry.type.inner) && !(entry.type.inner.kind === "void" && neverEntry(el))) {
+      // A payload that widens into the result's (into 'unknown', or a
+      // checked conversion) keeps its promise and settlement turn.
+      if (lowerer.promisePayloadWidens(entry.type, resultT))
+        return lowerer.coerceToExpected(entry, resultT);
+      lowerer.unsupported(
+        "SC1090",
+        el,
+        `Promise.race entries of inner type '${lowerer.fmt(entry.type.inner)}' under a ` +
+          `'${lowerer.fmt(resultT.inner)}' result (every entry must be the result type, one ` +
+          `of its arms, or a sub-union of it)`,
+      );
+    }
+    return entry;
+  });
+  return { kind: "intrinsic", name: "promise.race", args: entries, type: resultT, loc };
+}
+
 /** `Promise.race([...])` on THE Promise global: the entries lower
  * individually (the array never materializes — promise-element arrays
  * have no representation) into a promise.race intrinsic; the result
@@ -870,103 +1099,44 @@ export function lowerPromiseStaticCall(
   const loc = locOf(call);
   if (member === "race") {
     const argNode = call.arguments.nodes.length === 1 ? call.arguments.nodes[0]! : null;
-    if (
-      !argNode ||
-      !ts.isArrayLiteralExpression(argNode) ||
-      argNode.elements.nodes.some(ts.isSpreadElement) ||
-      argNode.elements.nodes.length === 0
-    ) {
+    // An array VALUE of one promise type (`Promise.race(waits.map(...))`):
+    // the runtime joins its elements in index order.
+    if (argNode && !ts.isArrayLiteralExpression(withoutParentheses(argNode))) {
+      const resultT = lowerer.mapTypeOf(lowerer.typeOf(call));
+      const argT = lowerer.mapTypeOf(lowerer.typeOf(argNode));
+      if (
+        resultT?.kind === "promise" &&
+        argT?.kind === "array" &&
+        argT.elem.kind === "promise" &&
+        typeEquals(argT.elem, resultT)
+      ) {
+        const entries = lowerer.lowerExpr(argNode);
+        if (entries.type.kind === "array" && typeEquals(entries.type.elem, resultT))
+          return {
+            kind: "intrinsic",
+            name: "promise.raceArray",
+            args: [entries],
+            type: resultT,
+            loc,
+          };
+      }
+    }
+    const expanded = argNode ? raceEntryAlternatives(argNode) : null;
+    if (!argNode || !expanded) {
       lowerer.noLowering(
         "Promise.race over this argument shape",
         call,
         "a non-empty array LITERAL of promises is the supported form: Promise.race([p, q])",
       );
     }
-    // A Promise<never> entry (the deadline idiom: `new Promise<never>((_,
-    // reject) => setTimeout(reject, ms))`) can only reject, so it races
-    // under any result type; its inner type maps to void.
-    const neverEntry = (el: ts.Expression): boolean => {
-      const t = lowerer.typeOf(el);
-      const arg =
-        ts.symbolNameOf(t.getSymbol()) === "Promise"
-          ? lowerer.checker.getTypeArguments(t as ts.TypeReference)[0]
-          : undefined;
-      return arg !== undefined && (arg.flags & ts.TypeFlags.Never) !== 0;
-    };
-    const elements = argNode.elements.nodes;
-    let combined = lowerer.mapTypeOf(lowerer.typeOf(call));
-    let lowered: IrExpr[] | null = null;
-    if (combined?.kind !== "promise") {
-      // The checker's combined type has no representation (an 'any'
-      // element array such as events.once's any[], or 'void | any[]'): the
-      // result takes the one type the entries that can fulfill share, or
-      // else 'unknown' when each of them widens into it.
-      lowered = elements.map((el) => lowerer.lowerExpr(el));
-      const fulfilling = lowered.filter((_, i) => !neverEntry(elements[i]!));
-      const first = fulfilling[0]?.type;
-      const dynResult: IrType & { kind: "promise" } = { kind: "promise", inner: DYN };
-      if (first?.kind === "promise" && fulfilling.every((e) => typeEquals(e.type, first))) {
-        combined = first;
-      } else if (
-        fulfilling.length > 0 &&
-        fulfilling.every(
-          (e) => e.type.kind === "promise" && lowerer.promisePayloadWidens(e.type, dynResult),
-        )
-      ) {
-        combined = dynResult;
-      } else {
-        lowerer.noLowering(
-          "Promise.race with this combined result type",
-          call,
-          "the entries' value types must combine into a representable union",
-        );
-      }
-    }
-    const resultT = combined;
-    const resultArms =
-      resultT.inner.kind === "union"
-        ? (lowerer.unions.get(resultT.inner.unionId)?.arms ?? [])
-        : null;
-    const compatible = (inner: IrType): boolean => {
-      if (typeEquals(inner, resultT.inner)) return true;
-      if (!resultArms) return false;
-      // A Promise<void> entry fulfills with undefined, which the result
-      // holds when the checker folded `void` into its undefined arm.
-      if (inner.kind === "void") return resultArms.some((a) => a.kind === "undefinedT");
-      if (inner.kind === "union") {
-        const arms = lowerer.unions.get(inner.unionId)?.arms ?? [];
-        return arms.every((a) => resultArms.some((b) => typeEquals(a, b)));
-      }
-      return resultArms.some((a) => typeEquals(a, inner));
-    };
-    const entries = elements.map((el, i) => {
-      const made = lowered?.[i] ?? lowerer.lowerExpr(el);
-      // An entry whose static type has a thenable part joins as the promise
-      // PromiseResolve makes of it.
-      const entry = promiseResolveThenable(lowerer, el, made, locOf(el)) ?? made;
-      if (entry.type.kind !== "promise") {
-        lowerer.noLowering(
-          "Promise.race over non-promise entries",
-          el,
-          "JS would resolve plain values — wrap them: new Promise((r) => r(v))",
-        );
-      }
-      if (!compatible(entry.type.inner) && !(entry.type.inner.kind === "void" && neverEntry(el))) {
-        // A payload that widens into the result's (into 'unknown', or a
-        // checked conversion) keeps its promise and settlement turn.
-        if (lowerer.promisePayloadWidens(entry.type, resultT))
-          return lowerer.coerceToExpected(entry, resultT);
-        lowerer.unsupported(
-          "SC1090",
-          el,
-          `Promise.race entries of inner type '${lowerer.fmt(entry.type.inner)}' under a ` +
-            `'${lowerer.fmt(resultT.inner)}' result (every entry must be the result type, one ` +
-            `of its arms, or a sub-union of it)`,
-        );
-      }
-      return entry;
-    });
-    return { kind: "intrinsic", name: "promise.race", args: entries, type: resultT, loc };
+    if (expanded.spreads.length === 0)
+      return lowerRaceEntries(
+        lowerer,
+        call,
+        expanded.fixed.map((node) => ({ node, value: null })),
+        loc,
+      );
+    return lowerConditionalRace(lowerer, call, expanded, loc);
   }
   // `Promise.all(ps)` over ONE promise type: the argument is any
   // expression of type Promise<T>[] (promise-element arrays are real —

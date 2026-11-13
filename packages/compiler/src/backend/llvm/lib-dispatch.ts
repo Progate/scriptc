@@ -1281,7 +1281,10 @@ function emitAssertFailing(
 /** Runtime string functions that only read their string arguments and keep
  * no reference to them: their operands are lent (a comparator's
  * `a.name.localeCompare(b.name)` reads both fields without retaining). */
-const READ_ONLY_STRING_LIB_FNS: ReadonlySet<IrLibFn> = new Set<IrLibFn>(["str.localeCompare"]);
+const READ_ONLY_STRING_LIB_FNS: ReadonlySet<IrLibFn> = new Set<IrLibFn>([
+  "str.localeCompare",
+  "str.localeCompareWith",
+]);
 
 /** The most parameters scr_regex_replace_fn calls a replacer with
  * (SCR_REPLACER_MAX_ARITY), the first bit of its string-or-undefined

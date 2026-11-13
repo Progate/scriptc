@@ -686,11 +686,11 @@ export function lowerIncDecTarget(
     };
   }
   if (target.type.kind === "union") {
-    const read = lowerOptionalNumber(
+    const read = narrowedNumberArm(
       lowerer,
-      varRef(target.id, target.type, loc),
-      loc,
+      lowerOptionalNumber(lowerer, varRef(target.id, target.type, loc), loc, expr.operand),
       expr.operand,
+      loc,
     );
     if (read.type.kind === "f64") {
       const old = lowerer.declareHiddenLocal("%numericOld", F64);
@@ -780,6 +780,24 @@ export function lowerIncDecTarget(
   if (target.type.kind !== "f64")
     operatorUnsupported(lowerer, expr, op === "+" ? "++" : "--", [target.type]);
   return { kind: "incDec", op, prefix, localId: target.id, type: F64, loc };
+}
+
+/** A union-typed binding the checker narrows to number at an update
+ * (`if (cp !== null) cp++` over `number | null`): the number arm, extracted
+ * with the checked helper every narrowed read uses, so a value smuggled past
+ * the guard throws instead of being misread. Other reads stay as given. */
+function narrowedNumberArm(
+  lowerer: Lowerer,
+  read: IrExpr,
+  operand: ts.Expression,
+  loc: SrcLoc,
+): IrExpr {
+  if (read.type.kind !== "union") return read;
+  if (lowerer.armTag(read.type.unionId, F64) < 0) return read;
+  if (lowerer.mapTypeOf(lowerer.typeOf(operand))?.kind !== "f64") return read;
+  const helper = lowerer.narrowedArmHelper(read.type.unionId, F64, loc);
+  if (!helper) return read;
+  return { kind: "call", callee: helper, args: [read], type: F64, loc };
 }
 
 /** `++`/`--` on a bigint value: old ± 1n. */

@@ -1,3 +1,4 @@
+import { lowerPerfHooksMemberRead } from "../builtins/performance.js";
 import { callableMemberFieldTarget } from "../callable-properties.js";
 import { lowerIteratorMemberValue } from "../iterator-prototype.js";
 import { widensReducedRecords } from "../function-returns.js";
@@ -1292,6 +1293,10 @@ export function lowerPropertyAccessExpr(
         unloweredGlobalValue(lowerer, canonical, expr, loc)
       );
     }
+  }
+  {
+    const timeOrigin = lowerPerfHooksMemberRead(lowerer, expr, loc);
+    if (timeOrigin) return timeOrigin;
   }
   // A member of a Node global object that no lowering above claimed
   // (`process.debugPort`, `performance.timeOrigin`, `crypto.subtle.digest`

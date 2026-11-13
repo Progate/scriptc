@@ -220,6 +220,7 @@ export function funcSlotAdaptable(
 ): boolean {
   if (restPackingAdapterFits(lowerer, src, dst)) return true;
   if (fixedIntoRestAdapterFits(lowerer, src, dst)) return true;
+  if (fixedIntoDynRestFits(lowerer, src, dst)) return true;
   if (variadicBoundaryFits(lowerer, src, dst)) return true;
   if (src.rest === true || dst.rest === true) return false;
   for (let i = dst.params.length; i < src.params.length; i++) {
@@ -625,55 +626,100 @@ function fixedIntoRestAdapter(
   return name;
 }
 
-/** Adapt a fixed-parameter function to a checked-dynamic rest signature
- * without fixed parameters (`() => {}` into mock.fn()'s `(...args: any[])
- * => undefined`): the adapter receives the hidden argument array and
- * passes its element i as parameter i, undefined when the caller passed
- * fewer arguments, as JS does. Null unless every parameter is
- * checked-dynamic, which holds a missing argument as undefined, and the
- * result is discarded or converts. */
+/** Whether a fixed-parameter function can serve a checked-dynamic rest
+ * signature without fixed parameters (`() => {}` into mock.fn()'s `(...args:
+ * any[]) => undefined`, or `(fd: number) => number` in a dispatch table of
+ * `(...args: any[]) => number | void` handlers called with an argument
+ * array): every parameter takes the checked conversion of an element of the
+ * argument array, and the result is discarded or converts. */
+export function fixedIntoDynRestFits(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "func" },
+  toT: IrType & { kind: "func" },
+): boolean {
+  if (toT.rest !== true || toT.restAbi !== undefined || toT.params.length !== 0) return false;
+  if (toT.argumentsAll === true || fromT.argumentsAll === true) return false;
+  if (fromT.rest === true) return false;
+  if (!fromT.params.every((p) => dynArgumentConvertible(lowerer, p))) return false;
+  return toT.ret.kind === "void" || lowerer.coercibleValue(fromT.ret, toT.ret);
+}
+
+/** Whether a checked-dynamic argument has a checked conversion to `type`:
+ * the mechanical set, plus bigints and unions whose arms each have one. */
+function dynArgumentConvertible(lowerer: Lowerer, type: IrType): boolean {
+  if (type.kind === "dyn" || type.kind === "bigint" || lowerer.coercibleValue(DYN, type))
+    return true;
+  if (type.kind !== "union") return false;
+  const arms = lowerer.unions.get(type.unionId)?.arms ?? [];
+  return (
+    arms.length > 0 && arms.every((arm) => isUnitType(arm) || dynArgumentConvertible(lowerer, arm))
+  );
+}
+
+/** The adapter for fixedIntoDynRestFits: it receives the hidden argument
+ * array and passes its element i as parameter i, undefined when the caller
+ * passed fewer arguments, as JS does. A checked-dynamic parameter takes the
+ * element as it is; any other takes the element's checked conversion to its
+ * declared type, which throws a TypeError for a value of another type (a
+ * missing argument included, unless the parameter's type holds undefined).
+ * Null when the pair does not fit. */
 function funcIntoDynRestAdapter(
   lowerer: Lowerer,
   fromT: IrType & { kind: "func" },
   toT: IrType & { kind: "func" },
   loc: SrcLoc,
 ): string | null {
-  if (fromT.rest === true || fromT.params.some((p) => p.kind !== "dyn")) return null;
-  if (toT.ret.kind !== "void" && !lowerer.coercibleValue(fromT.ret, toT.ret)) return null;
+  if (!fixedIntoDynRestFits(lowerer, fromT, toT)) return null;
   const key = `fnadapt:${typeKey(fromT)}:${typeKey(toT)}`;
   const existing = lowerer.coercions.retags.get(key);
   if (existing) return existing;
+  const params: IrParam[] = [{ localId: "rest.0", name: "args", type: DYN }];
+  const context = newFnCtx(false, null, null, toT.ret);
+  let body: IrStmt[];
+  lowerer.fnStack.push(context);
+  try {
+    const args = fromT.params.map((want, i): IrExpr => {
+      const element: IrExpr = {
+        kind: "dynKeyGet",
+        value: { kind: "varRef", localId: "rest.0", type: DYN, loc },
+        key: { kind: "strLit", value: String(i), type: STRING, loc },
+        type: DYN,
+        loc,
+      };
+      if (want.kind === "dyn") return element;
+      const converted = lowerer.coerceToExpected(element, want);
+      if (!typeEquals(converted.type, want))
+        throw new InternalCompilerError("lowerer bug: probed dyn-rest argument stopped coercing");
+      return converted;
+    });
+    const call: IrExpr = {
+      kind: "callValue",
+      callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+      receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
+      args,
+      type: fromT.ret,
+      loc,
+    };
+    if (toT.ret.kind === "void") {
+      body = [
+        { kind: "exprStmt", expr: call, loc },
+        { kind: "return", value: null, loc },
+      ];
+    } else {
+      const result = lowerer.coerceToExpected(call, toT.ret);
+      if (!typeEquals(result.type, toT.ret))
+        throw new InternalCompilerError("lowerer bug: probed fn-adapter return stopped coercing");
+      body = [{ kind: "return", value: result, loc }];
+    }
+  } finally {
+    lowerer.fnStack.pop();
+  }
   const name = keyedHelperName(lowerer, "%fn.adapt", key);
   lowerer.coercions.retags.set(key, name);
   lowerer.freshClosureAdapters.add(name);
-  const params: IrParam[] = [{ localId: "rest.0", name: "args", type: DYN }];
-  const call: IrExpr = {
-    kind: "callValue",
-    callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
-    receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
-    args: fromT.params.map((_, i): IrExpr => ({
-      kind: "dynKeyGet",
-      value: { kind: "varRef", localId: "rest.0", type: DYN, loc },
-      key: { kind: "strLit", value: String(i), type: STRING, loc },
-      type: DYN,
-      loc,
-    })),
-    type: fromT.ret,
-    loc,
-  };
-  let body: IrStmt[];
-  if (toT.ret.kind === "void") {
-    body = [
-      { kind: "exprStmt", expr: call, loc },
-      { kind: "return", value: null, loc },
-    ];
-  } else {
-    const result = lowerer.coerceToExpected(call, toT.ret);
-    if (!typeEquals(result.type, toT.ret))
-      throw new InternalCompilerError("lowerer bug: probed fn-adapter return stopped coercing");
-    body = [{ kind: "return", value: result, loc }];
-  }
-  lowerer.liftedFns.push(...buildFunctionAdapter(name, fromT, toT, params, [], body, loc));
+  lowerer.liftedFns.push(
+    ...buildFunctionAdapter(name, fromT, toT, params, context.locals, body, loc),
+  );
   return name;
 }
 

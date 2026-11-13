@@ -161,7 +161,11 @@ function callableTarget(
   receiverIr: IrType,
   forWrite: boolean,
 ): FieldTarget | null {
-  if (access.questionDotToken || !ts.isIdentifier(access.name)) return null;
+  if (!ts.isIdentifier(access.name)) return null;
+  // `fn?.k` on a receiver that cannot be nullish is `fn.k`: the chain has
+  // nothing to short-circuit. A nullable receiver keeps the chain's own
+  // lowering (its union does not lower as a closure anyway).
+  if (access.questionDotToken && receiverMayBeNullish(lowerer, access.expression)) return null;
   const name = access.name.text;
   if (FUNCTION_FIXED_SLOTS.has(name) || name === "__proto__") return null;
   if (receiverIr.kind !== "func") return null;
@@ -198,6 +202,19 @@ function callableTarget(
   const boxed = callableBox(lowerer, lowerer.lowerExpr(access.expression));
   if (!boxed) return null;
   return { container: "dynamic", obj: boxed, field: name, fieldType };
+}
+
+/** Whether the checker types `receiver` with a nullish (or untyped) member. */
+function receiverMayBeNullish(lowerer: Lowerer, receiver: ts.Expression): boolean {
+  const nullable =
+    ts.TypeFlags.Any |
+    ts.TypeFlags.Unknown |
+    ts.TypeFlags.Undefined |
+    ts.TypeFlags.Null |
+    ts.TypeFlags.Void;
+  const type = lowerer.typeOf(receiver);
+  const parts = type.flags & ts.TypeFlags.Union ? ts.constituentTypes(type) : [type];
+  return parts.some((part) => (part.flags & nullable) !== 0);
 }
 
 /** A receiver whose ELEMENT access addresses the closure's own-property

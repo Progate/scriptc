@@ -7,7 +7,15 @@ import { completeFuncValueArgs } from "../call-arguments.js";
 import { overloadValueResult } from "../lower-calls.js";
 import { dynUndefinedExpr } from "../../../ir/build.js";
 import * as ts from "../../ts7/adapter.js";
-import { DYN, STRING, UNDEFINED_T, VOID, isUnitType, typeEquals } from "../../../ir/ir.js";
+import {
+  DYN,
+  STRING,
+  UNDEFINED_T,
+  VOID,
+  isUnitType,
+  typeEquals,
+  type IrType,
+} from "../../../ir/ir.js";
 import type { IrExpr, IrStmt, SrcLoc } from "../../../ir/ir.js";
 import { isNodeEsmFile, locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
@@ -45,7 +53,7 @@ import { constituentTypes } from "../../ts7/checker.js";
 function chainTailDot(
   lowerer: Lowerer,
   expr: ts.Expression,
-): ts.PropertyAccessExpression | ts.ElementAccessExpression | null {
+): ts.PropertyAccessExpression | ts.ElementAccessExpression | ts.CallExpression | null {
   let cur: ts.Expression = expr;
   for (;;) {
     // An active chain's bound receiver read is a LEAF — its own token
@@ -57,8 +65,14 @@ function chainTailDot(
     }
     if (ts.isCallExpression(cur)) {
       // `f?.()` steps route through their own entry (or are being
-      // handled); a deeper token under one is that chain's business.
-      if (cur.questionDotToken) return null;
+      // handled); a deeper token under one is that chain's business. A
+      // deeper `f?.()` under a member tail (`f?.().catch(h)`) is the
+      // chain's guard when the callee is a plain function value: the
+      // guarded body calls the bound value, then the tail.
+      if (cur.questionDotToken) {
+        if (cur === expr || lowerer.chainHandled.has(cur)) return null;
+        return optionalCallTailGuard(lowerer, cur) ? cur : null;
+      }
       cur = cur.expression;
       continue;
     }
@@ -82,6 +96,37 @@ function chainTailDot(
     }
     return null;
   }
+}
+
+/** Whether `call` (an unhandled `f?.()` below a member tail) guards that
+ * tail: its callee is a variable holding a function value, possibly
+ * nullish, or a data field holding one, so the guarded body calls exactly
+ * the value the test read. Other callees (a method, an accessor, an element
+ * read) keep the split-it fence. */
+function optionalCallTailGuard(lowerer: Lowerer, call: ts.CallExpression): boolean {
+  let callee = call.expression;
+  while (ts.isParenthesizedExpression(callee)) callee = callee.expression;
+  if (ts.isPropertyAccessExpression(callee)) {
+    // A data field holding the function (`this.#unsubscribe?.()`) on
+    // `this` or a variable: the call may read the field again, and with no
+    // accessor and no code between the two reads, both see one value.
+    if (callee.expression.kind !== ts.SyntaxKind.ThisKeyword && !ts.isIdentifier(callee.expression))
+      return false;
+    const symbol = lowerer.checker.getSymbolAtLocation(callee.name);
+    if (
+      !symbol ||
+      (symbol.flags & ts.SymbolFlags.Property) === 0 ||
+      !symbol.declarations.every(
+        (d) => ts.isPropertyDeclaration(d) || ts.isPropertySignatureDeclaration(d),
+      )
+    )
+      return false;
+  } else if (!ts.isIdentifier(callee)) return false;
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(callee));
+  if (mapped?.kind === "func") return true;
+  if (mapped?.kind !== "union") return false;
+  const arms = lowerer.unions.get(mapped.unionId)?.arms ?? [];
+  return arms.filter((arm) => !isUnitType(arm)).every((arm) => arm.kind === "func");
 }
 
 /** True when `expr` is `require.main.filename` (either dot optional) on
@@ -536,7 +581,7 @@ export function lowerOptionalChain(
       loc,
     };
   }
-  const narrowed =
+  let narrowed: IrType =
     rest.length === 1
       ? rest[0]!
       : { kind: "union" as const, unionId: lowerer.unions.transform(def, rest) };
@@ -551,7 +596,27 @@ export function lowerOptionalChain(
     loc: locOf(recvNode),
   };
   if (narrowed.kind === "union" && receiver.type.kind === "union") {
-    recvRef = lowerer.coerceInto(recvNode, recvRef, narrowed);
+    // The checker can prove more than the nullish test: a union already
+    // narrowed by an earlier guard (`if (d !== "s") d?.length` over
+    // `Uint8Array | null | "s"`) is one present arm inside the chain, and
+    // the member dispatch types the receiver by it. Extract that arm with
+    // the checked helper a narrowed read uses.
+    const proven = lowerer.mapTypeOf(
+      lowerer.checker.getNonNullableType(chainReceiverType(lowerer, recvNode)),
+    );
+    const helper =
+      proven &&
+      proven.kind !== "union" &&
+      !isUnitType(proven) &&
+      rest.some((a) => typeEquals(a, proven))
+        ? lowerer.narrowedArmHelper(receiver.type.unionId, proven, loc)
+        : null;
+    if (helper) {
+      recvRef = { kind: "call", callee: helper, args: [recvRef], type: proven!, loc: recvRef.loc };
+      narrowed = proven!;
+    } else {
+      recvRef = lowerer.coerceInto(recvNode, recvRef, narrowed);
+    }
   }
 
   // `f?.()`: the callee IS the guarded value — build the indirect call
