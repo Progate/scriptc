@@ -19,6 +19,7 @@ import {
 } from "../../../ir/ir.js";
 import { PERF_ENTRY_FIELDS, PERF_ENTRY_MARKER, perfEntryJsonShape } from "../../type-mapper.js";
 import { builtinImportOf } from "./module-bindings.js";
+import { performanceTimeOrigin } from "../node-value-reads.js";
 import { lowerOptionalArgument } from "../optional-arguments.js";
 import { checkedIterableSpread } from "../checked-iterable-spread.js";
 
@@ -40,6 +41,19 @@ function isPerfHooksPerformanceExpr(lowerer: Lowerer, node: ts.Expression): bool
     return bi !== null && bi.module === "perf_hooks" && bi.member === "performance";
   }
   return false;
+}
+
+/** `performance.timeOrigin` on the performance object, in any spelling
+ * (node-value-reads.ts answers it: the wall clock at which the runtime's
+ * monotonic clock read zero, taken once). Null for other reads. */
+export function lowerPerfHooksMemberRead(
+  lowerer: Lowerer,
+  expr: ts.PropertyAccessExpression,
+  loc: SrcLoc,
+): IrExpr | null {
+  if (expr.questionDotToken || expr.name.text !== "timeOrigin") return null;
+  if (!isPerfHooksPerformanceExpr(lowerer, expr.expression)) return null;
+  return performanceTimeOrigin(lowerer, loc);
 }
 
 /** The user-timing members of the performance object: the runtime entry
