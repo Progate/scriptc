@@ -1790,8 +1790,8 @@ class FusedLoop {
             {
               kind: "if",
               cond:
-                result.type.kind === "bool"
-                  ? result
+                result.type.kind === "bool" || result.type.kind === "bigint"
+                  ? predicateToBoolean(result)
                   : { kind: "toBool", operand: result, type: BOOL, loc },
               then: visit(k + 1, flow),
               else_: null,
@@ -2031,6 +2031,8 @@ function predicateToBoolean(e: IrExpr): IrExpr {
   if (e.type.kind === "bool") return e;
   if (e.type.kind === "dyn")
     return { kind: "dynTest", test: "truthy", value: e, type: BOOL, loc: e.loc };
+  if (e.type.kind === "bigint")
+    return { kind: "libCall", fn: "bigint.truthy", args: [e], type: BOOL, loc: e.loc };
   return { kind: "toBool", operand: e, type: BOOL, loc: e.loc };
 }
 

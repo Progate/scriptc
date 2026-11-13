@@ -398,6 +398,8 @@ function filterCond(call: IrExpr, fnRet: IrType, loc: SrcLoc): IrExpr {
   // unsafe union arms (dyn/caught) at the call site, where a real node
   // exists for the diagnostic. A bare dyn value is handled directly by
   // the runtime's kind-aware ToBoolean.
+  if (fnRet.kind === "bigint")
+    return { kind: "libCall", fn: "bigint.truthy", args: [call], type: BOOL, loc };
   return { kind: "toBool", operand: call, type: BOOL, loc };
 }
 
@@ -1734,6 +1736,7 @@ export function findPredicateOk(lowerer: Lowerer, fnRet: IrType): boolean {
     fnRet.kind === "bool" ||
     fnRet.kind === "f64" ||
     fnRet.kind === "string" ||
+    fnRet.kind === "bigint" ||
     fnRet.kind === "dyn" ||
     (fnRet.kind === "union" &&
       (lowerer.unions.get(fnRet.unionId)?.arms ?? []).every(
@@ -1749,6 +1752,8 @@ export function predicateToBoolean(e: IrExpr): IrExpr {
   if (e.type.kind === "bool") return e;
   if (e.type.kind === "dyn")
     return { kind: "dynTest", test: "truthy", value: e, type: BOOL, loc: e.loc };
+  if (e.type.kind === "bigint")
+    return { kind: "libCall", fn: "bigint.truthy", args: [e], type: BOOL, loc: e.loc };
   return { kind: "toBool", operand: e, type: BOOL, loc: e.loc };
 }
 
