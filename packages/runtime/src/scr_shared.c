@@ -32,6 +32,7 @@ struct ScrSharedBytes {
   uint8_t *data;
   size_t mapped; /* bytes the data holds in a mapping of its own; 0 from the allocator */
   size_t held; /* the owner's count, moved to the shared bytes (scr_array_buffers_share) */
+  bool foreign; /* native code owns the data; releasing the storage never frees it */
 };
 
 /* A shared buffer of SCR_SHARED_MAP_AFTER bytes or more gets a mapping of its
@@ -92,6 +93,10 @@ ScrSharedBytes *scr_shared_retain(ScrSharedBytes *storage) {
 void scr_shared_release(ScrSharedBytes *storage) {
   if (!storage || atomic_fetch_sub_explicit(&storage->references, 1, memory_order_acq_rel) != 1) return;
   scr_array_buffers_sub(true, storage->held);
+  if (storage->foreign) {
+    free(storage);
+    return;
+  }
 #if SCR_SHARED_MMAP
   if (storage->mapped) munmap(storage->data, storage->mapped);
   else free(storage->data);
@@ -109,6 +114,7 @@ static void scr_bytes_make_shared_with(ScrBytes *bytes, size_t mapped) {
   storage->length = bytes->len * scr_bytes_elem_size(bytes->elem);
   storage->data = bytes->data;
   storage->mapped = mapped;
+  storage->foreign = false;
   storage->held = scr_bytes_held(bytes);
   scr_array_buffers_share(storage->held);
   scr_bytes_set_held(bytes, 0);
@@ -135,6 +141,21 @@ ScrBytes *scr_shared_wrap(ScrSharedBytes *storage) {
   bytes->external = false;
   bytes->shared = scr_shared_retain(storage);
   return bytes;
+}
+
+ScrBytes *scr_bytes_new_shared_foreign(void *data, size_t length) {
+  if (!data || !length) return scr_bytes_new_shared(0, 0);
+  ScrSharedBytes *storage = malloc(sizeof(*storage));
+  if (!storage) scr_trap("scriptc: out of memory\n");
+  atomic_init(&storage->references, 1);
+  storage->length = length;
+  storage->data = data;
+  storage->mapped = 0;
+  storage->held = 0;
+  storage->foreign = true;
+  ScrBytes *owner = scr_shared_wrap(storage);
+  scr_shared_release(storage);
+  return owner;
 }
 
 void scr_bytes_read(const ScrBytes *bytes, size_t offset, void *out, size_t length) {
@@ -267,9 +288,12 @@ double scr_atomics_op(ScrBytes *bytes, double index, double value, double replac
 /* Waiters queue per bucket, chosen by storage and byte offset. A bucket's
  * lock orders a wait's value check and registration against notify for the
  * same location; other Atomics operations never take it. */
+/* Waiters are keyed by the address of their cell rather than by storage, so
+ * buffers that alias the same foreign memory (scr_bytes_new_shared_foreign,
+ * called again after the memory grew) wait and notify on the same location.
+ * Distinct live storages never overlap otherwise. */
 typedef struct ScrAtomicWaiter {
-  ScrSharedBytes *storage;
-  size_t offset;
+  uintptr_t address;
   bool notified;
   struct ScrAtomicWaiter *next;
 } ScrAtomicWaiter;
@@ -305,8 +329,8 @@ static void scr_wait_init(void) {
 
 /* Locked bucket for a location (SRWLOCK and CONDITION_VARIABLE are valid
  * when zero-initialized). */
-static ScrWaitBucket *scr_wait_lock(ScrSharedBytes *storage, size_t offset) {
-  uintptr_t key = (uintptr_t)storage ^ (uintptr_t)(offset / 4) * 0x9E3779B1u;
+static ScrWaitBucket *scr_wait_lock(uintptr_t address) {
+  uintptr_t key = (address / 4) * 0x9E3779B1u;
   ScrWaitBucket *bucket = &scr_wait_buckets[(key ^ (key >> 7)) % SCR_WAIT_BUCKETS];
 #ifdef SCR_WAIT_THREADS
 #ifdef _WIN32
@@ -362,9 +386,9 @@ ScrStr *scr_atomics_wait(ScrBytes *bytes, double index, double expected, double 
   int32_t compare;
   uint32_t bits = scr_numeric_to_u32(expected);
   memcpy(&compare, &bits, sizeof compare);
-  size_t offset = (size_t)(bytes->data - bytes->shared->data) + i * 4;
   int32_t *cell = (int32_t *)(bytes->data + i * 4);
-  ScrWaitBucket *bucket = scr_wait_lock(bytes->shared, offset);
+  uintptr_t address = (uintptr_t)cell;
+  ScrWaitBucket *bucket = scr_wait_lock(address);
   /* Under the bucket lock, a notify for this location cannot fall between
    * this check and the registration below. */
   if (__atomic_load_n(cell, __ATOMIC_SEQ_CST) != compare) {
@@ -373,7 +397,7 @@ ScrStr *scr_atomics_wait(ScrBytes *bytes, double index, double expected, double 
   }
   double duration = isnan(timeout) ? INFINITY : fmax(timeout, 0);
   double end = scr_perf_now() + duration;
-  ScrAtomicWaiter waiter = {bytes->shared, offset, false, NULL};
+  ScrAtomicWaiter waiter = {address, false, NULL};
   ScrAtomicWaiter **tail = &bucket->waiters;
   while (*tail) tail = &(*tail)->next;
   *tail = &waiter;
@@ -386,7 +410,7 @@ ScrStr *scr_atomics_wait(ScrBytes *bytes, double index, double expected, double 
 #ifdef SCR_WORKERS
     scr_wait_unlock(bucket);
     stopped = scr_context_checkpoint();
-    bucket = scr_wait_lock(bytes->shared, offset);
+    bucket = scr_wait_lock(address);
     if (stopped) break;
 #endif
   }
@@ -402,12 +426,12 @@ double scr_atomics_notify(ScrBytes *bytes, double index, double count) {
   if (!scr_atomics_index(bytes, index, true, &i)) return 0;
   if (!bytes->shared) return 0;
   double limit = isnan(count) ? 0 : fmax(trunc(count), 0);
-  size_t offset = (size_t)(bytes->data - bytes->shared->data) + i * 4;
+  uintptr_t address = (uintptr_t)(bytes->data + i * 4);
   double notified = 0;
-  ScrWaitBucket *bucket = scr_wait_lock(bytes->shared, offset);
+  ScrWaitBucket *bucket = scr_wait_lock(address);
   /* Waiters are woken in the order they arrived (ECMA-262 WaiterList). */
   for (ScrAtomicWaiter *waiter = bucket->waiters; waiter && notified < limit; waiter = waiter->next) {
-    if (waiter->storage == bytes->shared && waiter->offset == offset && !waiter->notified) {
+    if (waiter->address == address && !waiter->notified) {
       waiter->notified = true;
       notified++;
     }

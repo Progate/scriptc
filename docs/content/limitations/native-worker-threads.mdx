@@ -58,3 +58,4 @@ A worker entry must be a compiled module, so a Node island module as the worker'
 Workers are unsupported in WASI, compiled libraries, and executables that use foreign-thread native callbacks.
 Ordinary callbacks that run on their owning script thread remain supported.
 Shared byte storage cannot expose unmanaged FFI pointers; copy it into an ordinary Buffer before passing it to native code.
+A `SharedArrayBuffer` that `node:ffi`'s `toSharedArrayBuffer` made over native memory is shared with workers like any other; native code already has its pointer.

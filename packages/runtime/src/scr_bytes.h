@@ -136,6 +136,10 @@ void scr_shared_release(ScrSharedBytes *);
 void scr_bytes_make_shared(ScrBytes *);
 ScrBytes *scr_bytes_new_shared(size_t bytes, size_t capacity);
 ScrBytes *scr_shared_wrap(ScrSharedBytes *);
+/* The owner of a shared buffer over `length` bytes of foreign memory at
+ * `data` that native code allocated and keeps alive; releasing it never frees
+ * the memory. An empty range gets ordinary empty shared storage. */
+ScrBytes *scr_bytes_new_shared_foreign(void *data, size_t length);
 void scr_bytes_read(const ScrBytes *, size_t, void *, size_t);
 void scr_bytes_write(ScrBytes *, size_t, const void *, size_t);
 ScrStr *scr_bytes_string(const ScrBytes *, size_t, size_t);

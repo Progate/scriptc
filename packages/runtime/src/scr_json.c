@@ -21477,7 +21477,7 @@ static ScrDyn *scr_ffi_memory_call(ScrClosure *closure, ScrDyn *const *args, siz
     scr_bigint_release(pointer);
     return result;
   }
-  if (method == 1) {
+  if (method == 1 || method == 3) {
     if (value->kind != SCR_DYN_BIGINT) {
       scr_dyn_arg_type_fail("pointer", "of type bigint", value);
       return NULL;
@@ -21503,7 +21503,8 @@ static ScrDyn *scr_ffi_memory_call(ScrClosure *closure, ScrDyn *const *args, siz
       scr_throw_error_msg_code(SCR_ERR_RANGE, message, sizeof message - 1, "ERR_OUT_OF_RANGE");
       return NULL;
     }
-    bool copy = argc < 3 || args[2]->kind == SCR_DYN_UNDEF || scr_dyn_truthy(args[2]);
+    bool shared = method == 3;
+    bool copy = !shared && (argc < 3 || args[2]->kind == SCR_DYN_UNDEF || scr_dyn_truthy(args[2]));
     void *pointer = scr_bigint_to_pointer(value->v.bigint);
     if (!pointer && length != 0) {
       static const char message[] = "Cannot create an ArrayBuffer from a null pointer";
@@ -21520,7 +21521,14 @@ static ScrDyn *scr_ffi_memory_call(ScrClosure *closure, ScrDyn *const *args, siz
       scr_throw_error_msg_code(SCR_ERR_ERROR, message, sizeof message - 1, "ERR_BUFFER_TOO_LARGE");
       return NULL;
     }
-    ScrBytes *bytes = copy ? scr_bytes_from_data(pointer, (size_t)length) :
+    if (shared && length > 0 && ((uintptr_t)pointer & 7)) {
+      /* Shared accesses are atomic instructions, which need natural alignment. */
+      static const char message[] = "The pointer must be aligned to 8 bytes";
+      scr_throw_error_msg_code(SCR_ERR_TYPE, message, sizeof message - 1, "ERR_INVALID_ARG_VALUE");
+      return NULL;
+    }
+    ScrBytes *bytes = shared ? scr_bytes_new_shared_foreign(pointer, (size_t)length) :
+      copy ? scr_bytes_from_data(pointer, (size_t)length) :
       scr_bytes_from_external(pointer, (size_t)length);
     ScrDyn *result = scr_array_buffer_from_bytes(bytes);
     scr_bytes_release(bytes);
@@ -21542,15 +21550,18 @@ static void scr_ffi_module_cleanup(void) {
 ScrDyn *scr_ffi_memory_module(ScrDyn *catalog) {
   if (scr_ffi_module_value) return scr_dyn_retain(scr_ffi_module_value);
   ScrDyn *module = scr_dyn_new_obj();
-  const char *names[] = {"getRawPointer", "toArrayBuffer", "dlopen"};
-  for (size_t i = 0; i < 3; i++) {
+  /* toSharedArrayBuffer is scriptc's own: a SharedArrayBuffer over foreign
+   * memory, which workers share by reference (scr_bytes_new_shared_foreign). */
+  const char *names[] = {"getRawPointer", "toArrayBuffer", "dlopen", "toSharedArrayBuffer"};
+  static const uint32_t arities[] = {1, 3, 2, 2};
+  for (size_t i = 0; i < 4; i++) {
     ScrClosure *closure = scr_closure_new(NULL, 2);
     closure->caps[0] = scr_box_new(SCR_BOX_F64);
     scr_box_set_f64(closure->caps[0], (double)i);
     closure->caps[1] = scr_box_new_obj(scr_dyn_retain_v, scr_dyn_release_v, scr_dyn_trace_v);
     scr_box_set_ref(closure->caps[1], scr_dyn_retain(catalog));
     scr_dyn_obj_set(module, names[i], strlen(names[i]),
-      scr_dyn_new_func(closure, scr_ffi_memory_call, i == 0 ? 1 : i == 1 ? 3 : 2, "", names[i]));
+      scr_dyn_new_func(closure, scr_ffi_memory_call, arities[i], "", names[i]));
   }
 #ifdef _WIN32
   const char *suffix = "dll";
