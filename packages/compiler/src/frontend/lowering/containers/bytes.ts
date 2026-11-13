@@ -786,7 +786,21 @@ export function lowerBytesStaticCall(
   const node = call.arguments.nodes[0]!;
   const source = lowerer.lowerExpr(node);
   if (call.arguments.nodes.length > 1) {
-    if (!["string", "array", "bytes"].includes(source.type.kind))
+    // A union of those sources (and absent values, which throw Node's
+    // TypeError) crosses into the helper as a checked-dynamic value; the
+    // helper iterates each arm as it does the arm's own type.
+    const sourceArms =
+      source.type.kind === "union"
+        ? (lowerer.unions.get(source.type.unionId)?.arms ?? [])
+        : [source.type];
+    if (
+      !sourceArms.every(
+        (arm) =>
+          ["string", "array", "bytes"].includes(arm.kind) ||
+          arm.kind === "undefinedT" ||
+          arm.kind === "nullT",
+      )
+    )
       lowerer.noLowering("TypedArray.from mapper over this source representation", call);
     const loc = locOf(call);
     const key = `%builtin.${elem}.fromMapped`;
