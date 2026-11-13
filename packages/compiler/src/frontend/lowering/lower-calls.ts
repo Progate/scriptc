@@ -12666,6 +12666,7 @@ export function lowerObjectMethodCall(
   if (mappedReceiver?.kind === "union") {
     const dispatched =
       lowerUnionObjectMethodCall(lowerer, call, access, mappedReceiver) ??
+      lowerUnionMapClassMethodCall(lowerer, call, access, mappedReceiver) ??
       lowerUnionObjectDynFieldCall(lowerer, call, access, mappedReceiver);
     if (dispatched) return dispatched;
     const arms = lowerer.unions.get(mappedReceiver.unionId)?.arms;
@@ -13204,6 +13205,174 @@ function lowerUnionObjectMethodCall(
     loc,
   );
   return { kind: "call", callee: helper, args: [receiver, ...args], type: resultT, loc };
+}
+
+/** `names.has(key)` on a union of one Map and classes whose own method of
+ * that name takes the same arguments (`Targets | Map<string, number>`, the
+ * class standing in for the Map): `has` and `delete` as values, `set` and
+ * `clear` as statements. The receiver and then the arguments evaluate once;
+ * the runtime tag picks the Map's own operation or the class's method. */
+function lowerUnionMapClassMethodCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  access: ts.PropertyAccessExpression,
+  receiverT: IrType & { kind: "union" },
+): IrExpr | null {
+  const def = lowerer.unions.get(receiverT.unionId);
+  if (!def) return null;
+  const mapArms = def.arms.filter((arm) => arm.kind === "map");
+  const objectArms = def.arms.filter(
+    (arm): arm is IrType & { kind: "object" } => arm.kind === "object",
+  );
+  if (
+    mapArms.length !== 1 ||
+    objectArms.length === 0 ||
+    mapArms.length + objectArms.length !== def.arms.length
+  )
+    return null;
+  const mapArm = mapArms[0] as IrType & { kind: "map" };
+  const method = access.name.text;
+  if (method !== "has" && method !== "delete" && method !== "set" && method !== "clear")
+    return null;
+  const argNodes = call.arguments.nodes;
+  if (argNodes.some(ts.isSpreadElement)) return null;
+  let parent: ts.Node | undefined = call.parent;
+  while (parent !== undefined && ts.isParenthesizedExpression(parent)) parent = parent.parent;
+  const statement = parent !== undefined && ts.isExpressionStatement(parent);
+  if ((method === "set" || method === "clear") && !statement) return null;
+  const expected: IrType[] =
+    method === "set" ? [mapArm.key, mapArm.value] : method === "clear" ? [] : [mapArm.key];
+  if (argNodes.length !== expected.length) return null;
+  const plans: { arm: IrType & { kind: "object" }; info: ClassInfo; found: NonNullable<ReturnType<Lowerer["findMethodOn"]>> }[] = [];
+  for (const arm of objectArms) {
+    const info = lowerer.classes.get(arm.className) ?? lowerer.flushDeferredClass(arm.className);
+    if (!info) return null;
+    const found = lowerer.findMethodOn(info, method);
+    if (!found || found.declarer.builtinError || isClassCallback(lowerer, info, method)) return null;
+    if (found.sig.abstract === true && !lowerer.overrideBelow(info, method)) return null;
+    const params = found.sig.params;
+    if (
+      params.length !== expected.length ||
+      !params.every((param, i) => param.mode === "required" && typeEquals(param.type, expected[i]!))
+    )
+      return null;
+    if (!statement && !typeEquals(found.sig.ret, BOOL)) return null;
+    plans.push({ arm, info, found });
+  }
+  const loc = locOf(call);
+  const receiverLocal = lowerer.declareHiddenLocal("%unionMapReceiver", receiverT);
+  const receiver = varRef(receiverLocal.id, receiverT, loc);
+  const stmts: IrStmt[] = [
+    {
+      kind: "varDecl",
+      localId: receiverLocal.id,
+      init: lowerer.coerceInto(access.expression, lowerer.lowerExpr(access.expression), receiverT),
+      loc,
+    },
+  ];
+  const argRefs = argNodes.map((node, i) => {
+    const type = expected[i]!;
+    const value =
+      i === 0 || type.kind === "dyn"
+        ? lowerer.lowerCollectionKey(node, type)
+        : lowerer.lowerExprExpecting(node, type);
+    const local = lowerer.declareHiddenLocal("%unionMapArg", type);
+    stmts.push({ kind: "varDecl", localId: local.id, init: value, loc: locOf(node) });
+    return varRef(local.id, type, loc);
+  });
+  const narrow = (arm: IrType): IrExpr => ({
+    kind: "unionNarrow",
+    unionId: receiverT.unionId,
+    tag: lowerer.armTag(receiverT.unionId, arm),
+    value: receiver,
+    type: arm,
+    loc,
+  });
+  const isArm = (arm: IrType): IrExpr => ({
+    kind: "unionIsTag",
+    unionId: receiverT.unionId,
+    tag: lowerer.armTag(receiverT.unionId, arm),
+    negated: false,
+    value: receiver,
+    type: BOOL,
+    loc,
+  });
+  const classCall = (plan: (typeof plans)[number]): IrExpr => {
+    const concrete = narrow(plan.arm);
+    if (lowerer.overrideBelow(plan.info, method)) {
+      lowerer.noteVirtualEdge(plan.info, method);
+      return {
+        kind: "virtualCall",
+        className: plan.info.def.name,
+        method,
+        args: [lowerer.upcastTo(concrete, plan.info.def.name), ...argRefs],
+        type: plan.found.sig.ret,
+        loc,
+      };
+    }
+    lowerer.noteEdge(`%${plan.found.declarer.def.name}.${method}`);
+    return {
+      kind: "call",
+      callee: `%${plan.found.declarer.def.name}.${method}`,
+      args: [lowerer.upcastTo(concrete, plan.found.declarer.def.name), ...argRefs],
+      type: plan.found.sig.ret,
+      loc,
+    };
+  };
+  const mapCall: IrExpr = {
+    kind: "mapIntrinsic",
+    method,
+    receiver: narrow(mapArm),
+    args: argRefs,
+    type: method === "has" || method === "delete" ? BOOL : VOID,
+    loc,
+  };
+  if (statement) {
+    let body: IrStmt[] = [{ kind: "exprStmt", expr: classCall(plans[plans.length - 1]!), loc }];
+    for (let i = plans.length - 2; i >= 0; i--) {
+      body = [
+        {
+          kind: "if",
+          cond: isArm(plans[i]!.arm),
+          then: [{ kind: "exprStmt", expr: classCall(plans[i]!), loc }],
+          else_: body,
+          loc,
+        },
+      ];
+    }
+    stmts.push({
+      kind: "if",
+      cond: isArm(mapArm),
+      then: [{ kind: "exprStmt", expr: mapCall, loc }],
+      else_: body,
+      loc,
+    });
+    return {
+      kind: "seqExpr",
+      stmts,
+      result: { kind: "libCall", fn: "console.noop", args: [], type: VOID, loc },
+      type: VOID,
+      loc,
+    };
+  }
+  let result: IrExpr = classCall(plans[plans.length - 1]!);
+  for (let i = plans.length - 2; i >= 0; i--) {
+    result = {
+      kind: "ternary",
+      cond: isArm(plans[i]!.arm),
+      then: classCall(plans[i]!),
+      else_: result,
+      type: BOOL,
+      loc,
+    };
+  }
+  return {
+    kind: "seqExpr",
+    stmts,
+    result: { kind: "ternary", cond: isArm(mapArm), then: mapCall, else_: result, type: BOOL, loc },
+    type: BOOL,
+    loc,
+  };
 }
 
 function paramAbisEqual(left: readonly ParamShape[], right: readonly ParamShape[]): boolean {
