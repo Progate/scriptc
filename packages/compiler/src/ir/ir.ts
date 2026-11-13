@@ -4189,6 +4189,10 @@ export type IrExpr =
    * same-type entries share the runtime's copy adapter, arm entries wrap
    * into the result union, sub-union entries re-tag arm-wise. First
    * settle wins; rejections copy raw and count handled on the entry.
+   * promise.raceArray: ONE arg, an array of promises whose inner type is
+   * the result's (Promise.race over an array value); the backend joins
+   * each element in index order (scr_promise_race_array) with the
+   * runtime's copy adapter.
    * promise.allSettled / promise.any: ONE arg, an array of promises
    * (Promise.all's countdown machinery). allSettled's type is a promise
    * of the PromiseSettledResult union array — the backend's per-entry
@@ -4216,6 +4220,7 @@ export type IrExpr =
         | "console.log"
         | "console.error"
         | "promise.race"
+        | "promise.raceArray"
         | "promise.all"
         | "promise.allSettled"
         | "promise.any"

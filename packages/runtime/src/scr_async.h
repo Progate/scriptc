@@ -396,6 +396,7 @@ void scr_promise_race_join(ScrPromise *race, ScrPromise *in,
                             void (*adapt)(ScrPromise *dst, ScrPromise *src));
 void scr_promise_race_add(ScrPromise *race, ScrPromise *in,
                            void (*adapt)(ScrPromise *dst, ScrPromise *src));
+ScrPromise *scr_promise_race_array(ScrArr *ps, void (*adapt)(ScrPromise *dst, ScrPromise *src));
 
 /* ── Promise.all (compiler-emitted combinator plumbing) ───────────────
  * BORROWS the Promise<T>[] entries array and the pre-capacity (empty,

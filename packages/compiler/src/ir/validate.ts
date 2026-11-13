@@ -4227,6 +4227,22 @@ function validateFunction(
       }
       return;
     }
+    if (e.name === "promise.raceArray") {
+      const a = e.args[0];
+      if (e.args.length !== 1 || a === undefined) {
+        err("promise.raceArray takes one array", e.loc);
+        return;
+      }
+      checkExpr(a);
+      if (
+        a.type.kind !== "array" ||
+        a.type.elem.kind !== "promise" ||
+        e.type.kind !== "promise" ||
+        !typeEquals(a.type.elem, e.type)
+      )
+        err("promise.raceArray needs a Promise<T>[] argument and a Promise<T> result", e.loc);
+      return;
+    }
     if (e.name === "promise.race") {
       // Entries are promises; the result is the combined promise. The
       // per-entry inner-type compatibility (equal to the result inner,

@@ -2369,6 +2369,20 @@ void scr_promise_race_join(ScrPromise *race, ScrPromise *in,
       in, (struct ScrPromiseCbWaiter){ .adapt = adapt, .dst = scr_promise_retain(race) });
 }
 
+/* Promise.race over a Promise<T>[] value: one race_join per element, in
+ * index order. BORROWS `ps`; the result is +1. An empty array leaves the
+ * result pending forever, as in JavaScript. */
+ScrPromise *scr_promise_race_array(ScrArr *ps, void (*adapt)(ScrPromise *dst, ScrPromise *src)) {
+  ScrPromise *race = scr_promise_new();
+  size_t n = ps->len;
+  for (size_t i = 0; i < n; i++) {
+    ScrPromise *in = (ScrPromise *)scr_arr_get_ref(ps, (double)i); /* +1 */
+    scr_promise_race_join(race, in, adapt);
+    scr_promise_release(in);
+  }
+  return race;
+}
+
 #ifdef SCR_NODE_ISLANDS
 /* Node islands (NI-5): runs `cb(in, in)` inside `in`'s settlement, for
  * fulfillments and rejections alike (a native promise's V8 representative
