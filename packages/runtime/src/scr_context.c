@@ -379,8 +379,11 @@ ScrDyn *scr_worker_thread_name_current(void) {
  * without a known stack extent keep the guard at zero, which leaves the
  * generated entry checks inert. */
 #if defined(__linux__) && !defined(SCR_LIB)
+#include <pthread.h>
 #include <sys/auxv.h>
 #include <sys/resource.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #elif defined(__APPLE__) && !defined(SCR_LIB)
 #include <pthread.h>
 #endif
@@ -439,9 +442,15 @@ void scr_stack_guard_init(void) {
   size_t size = pthread_get_stacksize_np(self);
   if (high > size) SCR_STACK_GUARD_SET(scr_stack_guard_for(high - size, size));
 #elif defined(__linux__) && !defined(SCR_LIB)
+  /* Worker threads, and a program whose `main` an embedding application
+   * calls on a thread of its own (a native program object linked into an
+   * app): the thread library knows the exact extent. Only the process's
+   * initial thread has the on-demand stack measured below. */
+  bool initial_thread = getpid() == (pid_t)syscall(SYS_gettid);
 #ifdef SCR_WORKERS
-  if (!scr_context_is_main()) {
-    /* Worker threads: the thread library knows the exact extent. */
+  if (!scr_context_is_main()) initial_thread = false;
+#endif
+  if (!initial_thread) {
     pthread_attr_t attr;
     void *low = NULL;
     size_t size = 0;
@@ -451,7 +460,6 @@ void scr_stack_guard_init(void) {
     pthread_attr_destroy(&attr);
     return;
   }
-#endif
   /* The main thread's stack grows on demand up to RLIMIT_STACK, measured
    * from the top of its mapping. The kernel places the executable's path
    * (AT_EXECFN) at the very top, followed only by a terminating pointer, so
