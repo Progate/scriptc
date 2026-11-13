@@ -236,6 +236,7 @@ export function classMethodValue(
   info: ClassInfo,
   method: string,
   loc: SrcLoc,
+  widenOverride = false,
 ): IrExpr | null {
   const found = findMethodOn(lowerer, info, method);
   const generic = found ? null : findGenericMethodOn(lowerer, info, method);
@@ -257,6 +258,22 @@ export function classMethodValue(
     ret = found.sig.ret;
     callee = `%${owner.def.name}.${method}`;
     if (!owner.builtinError) lowerer.noteEdge(callee);
+    // The prototype slot of a TypeScript override that declares parameters
+    // past the inherited slot holds that override, so a dynamic call passes
+    // every declared argument on to its own body. (A method value read in
+    // source keeps the slot's type, which every override shares.)
+    const widened = widenOverride ? owner.returnAdapters?.get(method) : undefined;
+    if (
+      widened !== undefined &&
+      widened.params.length > params.length &&
+      typeEquals(widened.ret, ret) &&
+      !widened.async &&
+      owner.decl !== null &&
+      !isJsSourceFile(ts.getSourceFileOfNode(owner.decl))
+    ) {
+      params = widened.params;
+      callee = `%${owner.def.name}.${method}$own`;
+    }
   } else if (
     generic?.info.implicitParams &&
     generic.declarer.decl &&

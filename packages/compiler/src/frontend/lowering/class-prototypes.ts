@@ -206,7 +206,7 @@ export function classPrototypeData(
         method.startsWith("set:")
       )
         continue;
-      const compiled = classMethodValue(lowerer, access, info, method, locOf(access));
+      const compiled = classMethodValue(lowerer, access, info, method, locOf(access), true);
       if (!compiled) continue;
       // A method value without a checked-dynamic form (an async method's
       // promise-returning signature) gets no data slot.

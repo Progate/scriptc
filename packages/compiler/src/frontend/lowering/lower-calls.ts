@@ -12960,15 +12960,24 @@ export function lowerObjectMethodCall(
       !(found.declarer.decl && isJsSourceFile(ts.getSourceFileOfNode(found.declarer.decl)))
         ? widened
         : null;
-    const args = lowerer.completeArgs(
-      call.arguments.nodes,
-      own?.params ?? found.sig.params,
-      loc,
-      call,
-    );
+    // An override below that also takes the extra arguments: the declared
+    // dispatch runs each widened override's own body (lowerWidenedOverrideCall).
+    const widenedDispatch =
+      virtual &&
+      widened !== undefined &&
+      !(found.declarer.decl && isJsSourceFile(ts.getSourceFileOfNode(found.declarer.decl))) &&
+      call.arguments.nodes.length > found.sig.params.length
+        ? lowerWidenedOverrideCall(lowerer, call, info, found.declarer, method, widened, () => value)
+        : null;
+    const args =
+      widenedDispatch !== null
+        ? []
+        : lowerer.completeArgs(call.arguments.nodes, own?.params ?? found.sig.params, loc, call);
     if (virtual) lowerer.noteVirtualEdge(info, method);
     else lowerer.noteEdge(`%${found.declarer.def.name}.${method}`);
-    const fallback: IrExpr = virtual
+    const fallback: IrExpr = widenedDispatch
+      ? widenedDispatch
+      : virtual
       ? {
           kind: "virtualCall",
           className: info.def.name,
