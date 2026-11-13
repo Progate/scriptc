@@ -8721,7 +8721,7 @@ function localSubclassesOf(lowerer: Lowerer, base: ts.Node): readonly ts.ClassLi
  * `get:x` and `set:x`). A call on `base`'s class then dispatches on the
  * receiver; devirtualization turns it back into a direct call when no such
  * override is reachable. */
-function localOverrideBelow(
+export function localOverrideBelow(
   lowerer: Lowerer,
   base: ts.Node,
   name: string,

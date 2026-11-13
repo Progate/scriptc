@@ -1,0 +1,6 @@
+{
+ "order": [
+  "<repo>/tests/corpus/widened-override-dispatch.ts"
+ ],
+ "diags": []
+}

@@ -276,6 +276,7 @@ import {
   exactClassOfReceiver,
   exactInstanceClassOf,
   findGenericMethodOn,
+  localOverrideBelow,
   lowerClassGenericMethodCall,
   lowerStaticMethodCall,
   lowerStaticSuperCall,
@@ -13066,6 +13067,22 @@ export function lowerObjectMethodCall(
       loc: locOf(call),
     };
   }
+  if (
+    adapted &&
+    !(declarerDecl && isJsSourceFile(ts.getSourceFileOfNode(declarerDecl))) &&
+    call.arguments.nodes.length > found.sig.params.length
+  ) {
+    const widened = lowerWidenedOverrideCall(
+      lowerer,
+      call,
+      info,
+      found.declarer,
+      method,
+      adapted,
+      lowerReceiver,
+    );
+    if (widened) return widened;
+  }
   if (lowerer.overrideBelow(info, method)) lowerer.noteVirtualEdge(info, method);
   else lowerer.noteEdge(`%${found.declarer.def.name}.${method}`);
   const receiver = lowerReceiver();
@@ -13109,6 +13126,121 @@ export function lowerObjectMethodCall(
     type: found.sig.ret,
     loc: locOf(call),
   });
+}
+
+/** A call that passes arguments past the inherited slot arity to an
+ * override that declares them (`root.pathOpen(path, oflags, fdflags,
+ * lookup, mode, access)` where the base class declares four parameters),
+ * while subclasses override the method again with the same widened
+ * parameter list. The virtual slot carries only the inherited arity, so the
+ * call dispatches on the receiver's class itself: each widened override's
+ * own body, most derived first, under the widened parameters. The receiver
+ * and the arguments evaluate once. Null when an override below keeps the
+ * inherited arity or widens differently, or a function-local class
+ * overrides it (those keep the refusal). */
+function lowerWidenedOverrideCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  info: ClassInfo,
+  declarer: ClassInfo,
+  method: string,
+  adapted: { params: ParamShape[]; ret: IrType },
+  lowerReceiver: () => IrExpr,
+): IrExpr | null {
+  if (call.arguments.nodes.some(ts.isSpreadElement)) return null;
+  if (call.arguments.nodes.length > adapted.params.length) return null;
+  if (info.decl !== null && localOverrideBelow(lowerer, info.decl, method)) return null;
+  const overrides: { info: ClassInfo; depth: number }[] = [];
+  let ok = true;
+  const visit = (cls: ClassInfo, depth: number): void => {
+    for (const sub of cls.subclasses) {
+      if (!ok) return;
+      if (sub.decl !== null && localOverrideBelow(lowerer, sub.decl, method)) ok = false;
+      const own = sub.methods.get(method);
+      if (own !== undefined && own.abstract !== true) {
+        const widened = sub.returnAdapters?.get(method);
+        if (
+          widened === undefined ||
+          (sub.decl !== null && isJsSourceFile(ts.getSourceFileOfNode(sub.decl))) ||
+          !paramAbisEqual(widened.params, adapted.params) ||
+          !typeEquals(widened.ret, adapted.ret)
+        ) {
+          ok = false;
+          return;
+        }
+        overrides.push({ info: sub, depth });
+      }
+      visit(sub, depth + 1);
+    }
+  };
+  visit(info, 1);
+  if (!ok || overrides.length === 0) return null;
+  overrides.sort((a, b) => b.depth - a.depth);
+  const loc = locOf(call);
+  const receiverT: IrType = { kind: "object", className: info.def.name };
+  const receiverLocal = lowerer.declareHiddenLocal("%widenedReceiver", receiverT);
+  const receiver = varRef(receiverLocal.id, receiverT, loc);
+  const stmts: IrStmt[] = [
+    { kind: "varDecl", localId: receiverLocal.id, init: lowerReceiver(), loc },
+  ];
+  const args = lowerer.completeArgs(call.arguments.nodes, adapted.params, loc, call).map((arg) => {
+    const local = lowerer.declareHiddenLocal("%widenedArg", arg.type);
+    stmts.push({ kind: "varDecl", localId: local.id, init: arg, loc });
+    return varRef(local.id, arg.type, loc);
+  });
+  const ownCall = (target: ClassInfo, self: IrExpr): IrExpr => {
+    lowerer.noteEdge(`%${target.def.name}.${method}`);
+    return {
+      kind: "call",
+      callee: `%${target.def.name}.${method}$own`,
+      args: [self, ...args],
+      type: adapted.ret,
+      loc,
+    };
+  };
+  const branches = overrides.map(({ info: sub }) => ({
+    test: { kind: "instanceOf", value: receiver, className: sub.def.name, type: BOOL, loc } as IrExpr,
+    invoke: ownCall(sub, {
+      kind: "downcast",
+      value: receiver,
+      type: { kind: "object", className: sub.def.name },
+      loc,
+    }),
+  }));
+  const fallback = ownCall(declarer, lowerer.upcastTo(receiver, declarer.def.name));
+  if (adapted.ret.kind === "void") {
+    let body: IrStmt[] = [{ kind: "exprStmt", expr: fallback, loc }];
+    for (let i = branches.length - 1; i >= 0; i--) {
+      body = [
+        {
+          kind: "if",
+          cond: branches[i]!.test,
+          then: [{ kind: "exprStmt", expr: branches[i]!.invoke, loc }],
+          else_: body,
+          loc,
+        },
+      ];
+    }
+    return {
+      kind: "seqExpr",
+      stmts: [...stmts, ...body],
+      result: { kind: "libCall", fn: "console.noop", args: [], type: VOID, loc },
+      type: VOID,
+      loc,
+    };
+  }
+  let result: IrExpr = fallback;
+  for (let i = branches.length - 1; i >= 0; i--) {
+    result = {
+      kind: "ternary",
+      cond: branches[i]!.test,
+      then: branches[i]!.invoke,
+      else_: result,
+      type: adapted.ret,
+      loc,
+    };
+  }
+  return { kind: "seqExpr", stmts, result, type: adapted.ret, loc };
 }
 
 /** A method TypeScript proves callable on every arm of an unrelated class
