@@ -4,6 +4,7 @@ import type { Lowerer } from "./lowerer.js";
 import { isJsSourceFile } from "../program.js";
 import { dynFallbackType } from "./lowerer.js";
 import { isGenericCallableMemberType } from "../type-mapper.js";
+import { bindingInContext } from "./function-context.js";
 export { bindingNeverReassigned, fileWritesBinding, type BindingScope } from "../binding-writes.js";
 /** An identifier that reads or declares a binding (not a member name).
  * `o.value`, `{ value: 1 }`, `const { value: v } = o` and `value?: T` all put
@@ -186,6 +187,23 @@ export function nullishGenericBindingUnitOf(
       return null;
     }
   }
+  return unit;
+}
+
+/** The nullish unit a binding with NO storage provably holds: the value fact
+ * (nullishValueUnitOf) for a binding no module global and no enclosing
+ * function context holds. Its declaration emitted nothing (the no-storage
+ * family, whose type question can answer differently by context), so a read
+ * is the unit and a call throws Node's TypeError. */
+export function storagelessNullishUnitOf(
+  lowerer: Lowerer,
+  sym: ts.Symbol | null,
+): "null" | "undefined" | null {
+  if (!sym) return null;
+  const unit = nullishValueUnitOf(lowerer, sym);
+  if (unit === null) return null;
+  if (lowerer.globalsBySymbol.has(sym) || lowerer.isBlockedBinding(sym)) return null;
+  if (lowerer.fnStack.some((ctx) => bindingInContext(ctx, sym) !== null)) return null;
   return unit;
 }
 

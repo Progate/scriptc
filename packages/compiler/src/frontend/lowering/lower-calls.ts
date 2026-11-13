@@ -66,7 +66,7 @@ import {
   lowerFsStreamMethodCall,
 } from "./builtins/fs-streams.js";
 import * as ts from "../ts7/adapter.js";
-import { withoutParentheses } from "../outer-expressions.js";
+import { withoutParentheses, withoutParenthesesTypeWrappers } from "../outer-expressions.js";
 import {
   isZlibStreamMember,
   lowerPromisifiedZlibCall,
@@ -347,7 +347,7 @@ import { lowerClassFieldDefine, lowerClassIntegrity } from "./class-attributes.j
 import { freezableRecordType, lowerNativeFreeze, noteUntypedIntegrity } from "./frozen-records.js";
 import { classStaticDataFor } from "./class-static-data.js";
 import { lowerUrlFactory } from "./lower-url.js";
-import { nullishValueUnitOf } from "./binding-analysis.js";
+import { nullishValueUnitOf, storagelessNullishUnitOf } from "./binding-analysis.js";
 import {
   spreadNeedsRuntimeArity,
   completeFuncValueArgs,
@@ -807,6 +807,41 @@ export function lowerCall(lowerer: Lowerer, expr: ts.CallExpression): IrExpr {
           loc,
         );
       }
+    }
+  }
+
+  // A call of a binding that provably holds null or undefined forever and
+  // has no storage (`export const f: ((s: PromiseLike<T>) => U) | undefined
+  // = undefined`, whose declared type has no other home), read directly or
+  // as a member of the module namespace that exports it: the arguments
+  // evaluate, then the call throws Node's TypeError.
+  if (expr.questionDotToken === undefined) {
+    const callee = withoutParenthesesTypeWrappers(expr.expression);
+    const nameNode = ts.isIdentifier(callee)
+      ? callee
+      : ts.isPropertyAccessExpression(callee) &&
+          callee.questionDotToken === undefined &&
+          ts.isIdentifier(callee.name) &&
+          lowerer.mapTypeOf(lowerer.typeOf(callee.expression))?.kind === "moduleNs"
+        ? callee.name
+        : null;
+    const unit =
+      nameNode === null
+        ? null
+        : storagelessNullishUnitOf(lowerer, lowerer.resolveValueSymbol(nameNode));
+    if (unit !== null) {
+      const mapped = lowerer.mapTypeOf(lowerer.typeOf(expr));
+      const t =
+        mapped && mapped.kind !== "void" && !lowerer.typeNamesUnregisteredClass(mapped)
+          ? mapped
+          : F64;
+      const stmts: IrStmt[] = [];
+      for (const arg of expr.arguments.nodes) {
+        const value = lowerer.lowerExpr(arg);
+        stmts.push({ kind: "exprStmt", expr: value, loc: locOf(arg) });
+      }
+      const thrown = nodeThrowExpr(1, "", `${callee.getText()} is not a function`, t, loc);
+      return stmts.length === 0 ? thrown : { kind: "seqExpr", stmts, result: thrown, type: t, loc };
     }
   }
 

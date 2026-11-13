@@ -1,0 +1,7 @@
+{
+ "order": [
+  "<repo>/tests/corpus/nullish-unmappable-bindings/engine.ts",
+  "<repo>/tests/corpus/nullish-unmappable-bindings/main.ts"
+ ],
+ "diags": []
+}

@@ -24,6 +24,7 @@ import {
   type IrType,
   STRING,
   type SrcLoc,
+  NULL_T,
   UNDEFINED_T,
   arrayOf,
   funcOf,
@@ -118,6 +119,7 @@ import { moduleFileName } from "../import-meta.js";
 import { envSnapshotHelper, heldEnvValueType } from "../builtins/environment.js";
 import { processDataMemberValue } from "../builtins/process.js";
 import { adoptingResolveUse } from "../promise-resolution.js";
+import { storagelessNullishUnitOf } from "../binding-analysis.js";
 
 /** Whether this identifier is the RECEIVER of a member access — the dotted
  * or bracketed `held.X` / `held[k]`, read or written, through any erasure
@@ -1389,6 +1391,15 @@ export function lowerIdentifierExpr(lowerer: Lowerer, expr: ts.Identifier, loc: 
     (isJsSourceFile(ts.getSourceFileOfNode(expr)) || lowerer.projectLibraryNameAt(expr))
   ) {
     return nsUndefRead(lowerer, expr.text, expr, contextualUndefReadType(lowerer, expr) ?? DYN);
+  }
+  // A binding that provably holds null or undefined forever and has no
+  // storage (`export const f: ((s: PromiseLike<T>) => U) | undefined =
+  // undefined`, whose declared type has no other home): a plain read is
+  // that unit.
+  {
+    const unit = storagelessNullishUnitOf(lowerer, lowerer.resolveValueSymbol(expr));
+    if (unit !== null)
+      return { kind: "unitLit", unit, type: unit === "null" ? NULL_T : UNDEFINED_T, loc };
   }
   // Preflight guarantees no unresolved identifiers; anything else here
   // is a blocked declaration's binding (the SC2004 cascade) or a
