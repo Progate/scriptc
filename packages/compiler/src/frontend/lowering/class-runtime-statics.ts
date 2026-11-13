@@ -5,6 +5,7 @@ import { locOf } from "../program.js";
 import type { Lowerer } from "./lowerer.js";
 import { classMemberNameOf, classValueRef, type ClassInfo } from "./lower-classes.js";
 import { classPrototypeData } from "./class-prototypes.js";
+import { builtinClassKind } from "./builtins/builtin-class-dyn.js";
 
 export function hasRuntimeStatics(info: ClassInfo): boolean {
   for (let current: ClassInfo | null = info; current; current = current.base) {
@@ -60,8 +61,14 @@ export function initializeRuntimeStatics(
   const local = lowerer.declareHiddenLocal("%staticClass", value.type);
   const receiver = varRef(local.id, value.type, loc);
   const boxed = lowerer.coerceToExpected(receiver, DYN);
+  // A runtime-provided base with no checked-dynamic class value (`Error`,
+  // whose statics lower at their own sites) leaves the table without a
+  // parent: the hooks and statics the program class defines are its own.
   const base =
-    !info.localClass && info.base && !info.def.baseValueGlobal
+    !info.localClass &&
+    info.base &&
+    !info.def.baseValueGlobal &&
+    !(info.base.def.runtime && builtinClassKind(info.base.def.name) === null)
       ? lowerer.coerceToExpected(classValueRef(lowerer, info.base, info.decl!), DYN)
       : dynUndefinedExpr(loc);
   const statements: IrStmt[] = [
