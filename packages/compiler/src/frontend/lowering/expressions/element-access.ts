@@ -66,6 +66,7 @@ import { lowerGlobalObjectValue } from "../lower-global-value.js";
 import { fenceExpandoRead } from "../lower-expando.js";
 import {
   assertedElementKeepsUndefined,
+  bigintCompoundValue,
   compoundUnsupported,
   concatOperand,
   dynCompoundValue,
@@ -448,7 +449,13 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
     if (receiver.type.kind === "dyn") {
       const key = lowerer.lowerExprExpecting(expr.argumentExpression, DYN);
       return lowerer.maybeNarrow(
-        { kind: "dynKeyGet", value: receiver, key, type: DYN, loc: locOf(expr) },
+        {
+          kind: "dynKeyGet",
+          value: receiver,
+          key,
+          type: DYN,
+          loc: locOf(expr),
+        },
         expr,
       );
     }
@@ -559,7 +566,13 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
       const receiver = lowerer.coerceToExpected(lowerer.lowerExpr(expr.expression), DYN);
       const key = lowerer.lowerExprExpecting(expr.argumentExpression, DYN);
       return lowerer.maybeNarrow(
-        { kind: "dynKeyGet", value: receiver, key, type: DYN, loc: locOf(expr) },
+        {
+          kind: "dynKeyGet",
+          value: receiver,
+          key,
+          type: DYN,
+          loc: locOf(expr),
+        },
         expr,
       );
     }
@@ -619,7 +632,12 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         value: lowerer.coerceInto(expr.expression, recv, DYN),
         key:
           index.type.kind === "f64"
-            ? { kind: "toString", operand: index, type: STRING, loc: locOf(expr) }
+            ? {
+                kind: "toString",
+                operand: index,
+                type: STRING,
+                loc: locOf(expr),
+              }
             : lowerer.coerceToExpected(index, DYN),
         type: DYN,
         loc: locOf(expr),
@@ -829,7 +847,13 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         const safe = lowerSafeIndexRead(lowerer, obj, index, locOf(expr));
         if (safe) return safe;
         return lowerer.maybeNarrow(
-          { kind: "arrayGet", arr: obj, index, type: obj.type.elem, loc: locOf(expr) },
+          {
+            kind: "arrayGet",
+            arr: obj,
+            index,
+            type: obj.type.elem,
+            loc: locOf(expr),
+          },
           expr,
         );
       }
@@ -934,7 +958,13 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
             loc: locOf(expr.expression),
           };
           return lowerer.maybeNarrow(
-            { kind: "dynKeyGet", key, value: boxed, type: DYN, loc: locOf(expr) },
+            {
+              kind: "dynKeyGet",
+              key,
+              value: boxed,
+              type: DYN,
+              loc: locOf(expr),
+            },
             expr,
           );
         }
@@ -1132,7 +1162,12 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
         (id) => lowerer.unions.get(id),
       )
     ) {
-      arr = { kind: "dynCheck", value: arr, type: receiverIr, loc: locOf(expr) };
+      arr = {
+        kind: "dynCheck",
+        value: arr,
+        type: receiverIr,
+        loc: locOf(expr),
+      };
     } else {
       lowerer.unsupported(
         "SC1090",
@@ -1372,13 +1407,23 @@ function guardedRecordAccess(
   const litKey = recordKeyLiteralText(keyNode) ?? recordKeyTypeLiteralText(lowerer, keyNode);
   const key =
     litKey !== null
-      ? ({ kind: "strLit", value: litKey, type: STRING, loc: locOf(keyNode) } satisfies IrExpr)
+      ? ({
+          kind: "strLit",
+          value: litKey,
+          type: STRING,
+          loc: locOf(keyNode),
+        } satisfies IrExpr)
       : stabilized(lowerer, lowerer.lowerExpr(keyNode), "%recordKey", receiver.stmts);
   // A symbol key names no string property; its message spelling is not
   // modeled.
   const name =
     key.type.kind === "symbol"
-      ? ({ kind: "strLit", value: "Symbol()", type: STRING, loc: locOf(keyNode) } satisfies IrExpr)
+      ? ({
+          kind: "strLit",
+          value: "Symbol()",
+          type: STRING,
+          loc: locOf(keyNode),
+        } satisfies IrExpr)
       : lowerRecordPropertyKey(lowerer, key, keyNode);
   return { receiver, key, name };
 }
@@ -1421,7 +1466,13 @@ function lowerGuardedRecordWrite(
       {
         kind: "if",
         cond: undefinedReceiver(receiver, loc),
-        then: [{ kind: "exprStmt", expr: undefinedReceiverThrow(name, "set", VOID, loc), loc }],
+        then: [
+          {
+            kind: "exprStmt",
+            expr: undefinedReceiverThrow(name, "set", VOID, loc),
+            loc,
+          },
+        ],
         else_: [write],
         loc,
       },
@@ -1490,7 +1541,13 @@ function lowerWiderBytesWrite(
               type: BOOL,
               loc,
             },
-            then: [{ kind: "exprStmt", expr: undefinedReceiverThrow(name, "set", VOID, loc), loc }],
+            then: [
+              {
+                kind: "exprStmt",
+                expr: undefinedReceiverThrow(name, "set", VOID, loc),
+                loc,
+              },
+            ],
             else_: [{ kind: "bytesSet", arr: present, index: key, value, loc }],
             loc,
           },
@@ -1594,7 +1651,12 @@ export function lowerRecordKeyRead(
   if (obj.type.kind === "dyn") {
     let dk =
       litKey !== null
-        ? ({ kind: "strLit", value: litKey, type: STRING, loc: locOf(keyNode) } satisfies IrExpr)
+        ? ({
+            kind: "strLit",
+            value: litKey,
+            type: STRING,
+            loc: locOf(keyNode),
+          } satisfies IrExpr)
         : lowerer.lowerExpr(keyNode);
     // Number AND checked-dynamic keys ride the JS-exact formatter —
     // property keys ARE strings (o[k] is o[String(k)] in JS), and a dyn
@@ -1606,7 +1668,13 @@ export function lowerRecordKeyRead(
     if (dk.type.kind !== "string" && dk.type.kind !== "symbol" && dk.type.kind !== "dyn") {
       lowerer.unsupported("SC1090", keyNode, "indexing records with non-string or non-number keys");
     }
-    const read: IrExpr = { kind: "dynKeyGet", key: dk, value: obj, type: DYN, loc };
+    const read: IrExpr = {
+      kind: "dynKeyGet",
+      key: dk,
+      value: obj,
+      type: DYN,
+      loc,
+    };
     // Absence probes must keep the checked-dynamic undefined produced by
     // a missing key. The ordinary read narrows to the checker's declared
     // index value (and therefore validates it); ===/!==, ||, and ?? need
@@ -1668,7 +1736,12 @@ export function lowerRecordKeyRead(
   }
   let key =
     litKey !== null
-      ? ({ kind: "strLit", value: litKey, type: STRING, loc: locOf(keyNode) } satisfies IrExpr)
+      ? ({
+          kind: "strLit",
+          value: litKey,
+          type: STRING,
+          loc: locOf(keyNode),
+        } satisfies IrExpr)
       : lowerer.lowerExpr(keyNode);
   // Optional string/number keys need ToPropertyKey, not a boxed copy of
   // the receiver. Keep record reads on their native storage so nested
@@ -2330,7 +2403,14 @@ function lowerTupleIndexRead(
       type: BOOL,
       loc,
     };
-    answer = { kind: "ternary", cond, then: readAt(position), else_: answer, type: resultT, loc };
+    answer = {
+      kind: "ternary",
+      cond,
+      then: readAt(position),
+      else_: answer,
+      type: resultT,
+      loc,
+    };
   }
   if (stmts.length === 0) return answer;
   return { kind: "seqExpr", stmts, result: answer, type: resultT, loc };
@@ -2351,7 +2431,10 @@ export function lowerElementCompoundParts(
   // union key, `counts[name] += 1` on an index-signature record): the
   // member compound's receiver, key, old value, rhs, write sequence.
   if (isKeyedFieldAccess(lowerer, target))
-    return { expr: lowerFieldCompoundValue(lowerer, target, op, expr.right, loc), stmts: null };
+    return {
+      expr: lowerFieldCompoundValue(lowerer, target, op, expr.right, loc),
+      stmts: null,
+    };
   const checked = lowerer.lowerExpr(target.expression);
   // A typed callable's element is its own-property table entry: the same
   // read-modify-write the checked-dynamic receiver takes, through the
@@ -2399,7 +2482,10 @@ export function lowerElementCompoundParts(
       },
       loc,
     });
-    return { expr: { kind: "seqExpr", stmts, result: value, type: DYN, loc }, stmts: null };
+    return {
+      expr: { kind: "seqExpr", stmts, result: value, type: DYN, loc },
+      stmts: null,
+    };
   }
   const indexedArms = indexedUnionArms(lowerer, checked.type);
   if (indexedArms && !isJsSourceFile(ts.getSourceFileOfNode(expr)))
@@ -2487,7 +2573,13 @@ export function lowerElementCompoundParts(
     rhs.type.kind === "dyn" &&
     isJsSourceFile(ts.getSourceFileOfNode(expr)) &&
     receiver.type.kind === "bytes"
-      ? { kind: "libCall" as const, fn: "dyn.toNumberCoerce" as const, args: [rhs], type: F64, loc }
+      ? {
+          kind: "libCall" as const,
+          fn: "dyn.toNumberCoerce" as const,
+          args: [rhs],
+          type: F64,
+          loc,
+        }
       : lowerOptionalNumber(lowerer, rhs, loc);
   const elementType = receiver.type.kind === "array" ? receiver.type.elem : F64;
   const valueType =
@@ -2513,7 +2605,13 @@ export function lowerElementCompoundParts(
       stmts: [
         { kind: "varDecl", localId: receiverLocal.id, init: receiver, loc },
         { kind: "varDecl", localId: indexLocal.id, init: index, loc },
-        { kind: "arraySet", arr: receiverRef(), index: indexRef(), value: appended, loc },
+        {
+          kind: "arraySet",
+          arr: receiverRef(),
+          index: indexRef(),
+          value: appended,
+          loc,
+        },
       ],
     };
   }
@@ -2533,6 +2631,63 @@ export function lowerElementCompoundParts(
       left: lowerOptionalNumber(lowerer, oldRef(), loc),
       right: numericRhs,
       type: F64,
+      loc,
+    };
+  } else if (
+    valueType.kind === "bigint" &&
+    rhs.type.kind === "bigint" &&
+    op !== ">>>" &&
+    receiver.type.kind === "array"
+  ) {
+    // `counters[i] += 1n` on a bigint array: the element reads as
+    // `bigint | undefined` (a hole or an index past the end). The old value
+    // is held before the right side evaluates, then extracted where the
+    // operator applies it: a missing element throws the TypeError Node's
+    // `undefined + 1n` throws, after the right side ran.
+    let left: IrExpr = oldRef();
+    if (left.type.kind === "union") {
+      const unionId = left.type.unionId;
+      const arms = lowerer.unions.get(unionId)?.arms ?? [];
+      const bigTag = lowerer.armTag(unionId, BIGINT_T);
+      const undefTag = lowerer.armTag(unionId, UNDEFINED_T);
+      if (arms.length !== 2 || bigTag < 0 || undefTag < 0)
+        compoundUnsupported(lowerer, expr, op, oldValue.type, rhs.type);
+      left = {
+        kind: "ternary",
+        cond: {
+          kind: "unionIsTag",
+          unionId,
+          tag: undefTag,
+          value: left,
+          negated: false,
+          type: BOOL,
+          loc,
+        },
+        then: nodeThrowExpr(
+          1,
+          "",
+          "Cannot mix BigInt and other types, use explicit conversions",
+          BIGINT_T,
+          loc,
+        ),
+        else_: {
+          kind: "unionNarrow",
+          unionId,
+          tag: bigTag,
+          value: oldRef(),
+          type: BIGINT_T,
+          loc,
+        },
+        type: BIGINT_T,
+        loc,
+      };
+    }
+    const right = lowerer.declareHiddenLocal("%compoundRhs", BIGINT_T);
+    computed = {
+      kind: "seqExpr",
+      stmts: [{ kind: "varDecl", localId: right.id, init: rhs, loc }],
+      result: bigintCompoundValue(op, left, varRef(right.id, BIGINT_T, loc), loc)!,
+      type: BIGINT_T,
       loc,
     };
   } else if (valueType.kind === "dyn" && isJsSourceFile(ts.getSourceFileOfNode(expr))) {
@@ -2565,7 +2720,13 @@ export function lowerElementCompoundParts(
   const store: IrStmt =
     receiver.type.kind === "array"
       ? arrayValueStore(lowerer, receiverRef(), indexRef(), resultRef(), receiver.type.elem, loc)
-      : { kind: "bytesSet", arr: receiverRef(), index: indexRef(), value: resultRef(), loc };
+      : {
+          kind: "bytesSet",
+          arr: receiverRef(),
+          index: indexRef(),
+          value: resultRef(),
+          loc,
+        };
   const write: IrStmt = split
     ? {
         kind: "if",
@@ -2622,7 +2783,14 @@ function lowerIndexedUnionCompound(
   const oldValue = lowerIndexedUnionNumberRead(lowerer, receiverRef(), arms, indexRef(), loc);
   const rhs = lowerOptionalNumber(lowerer, lowerer.lowerExpr(expr.right), loc);
   if (rhs.type.kind !== "f64") compoundUnsupported(lowerer, expr, op, F64, rhs.type);
-  const computed: IrExpr = { kind: "bin", op, left: oldValue, right: rhs, type: F64, loc };
+  const computed: IrExpr = {
+    kind: "bin",
+    op,
+    left: oldValue,
+    right: rhs,
+    type: F64,
+    loc,
+  };
   const resultLocal = lowerer.declareHiddenLocal("%compoundResult", F64);
   const resultRef = (): IrExpr => varRef(resultLocal.id, F64, loc);
   return {
@@ -2720,7 +2888,14 @@ function lowerErasedKeyedWrite(
     const obj = narrowErasedRecordValue(lowerer, operand, locOf(copied.operand), message);
     if (!inPlace(obj)) return null;
     const value = lowerer.lowerExprExpecting(expr.right, field.type);
-    return { kind: "recordSet", obj, shapeId: obj.type.shapeId, field: key, value, loc };
+    return {
+      kind: "recordSet",
+      obj,
+      shapeId: obj.type.shapeId,
+      field: key,
+      value,
+      loc,
+    };
   }
   // An operand that may be undefined or null: Node evaluates the receiver,
   // then the right-hand side, and only then needs an object to write to, so
@@ -2818,7 +2993,13 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
     }
     return {
       kind: "exprStmt",
-      expr: { kind: "libCall", fn: "process.envSet", args: [key, value], type: VOID, loc },
+      expr: {
+        kind: "libCall",
+        fn: "process.envSet",
+        args: [key, value],
+        type: VOID,
+        loc,
+      },
       loc,
     };
   }
@@ -2964,7 +3145,13 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
       }
       return {
         kind: "exprStmt",
-        expr: { kind: "libCall", fn: "dyn.keySet", args: [obj, key, value], type: VOID, loc },
+        expr: {
+          kind: "libCall",
+          fn: "dyn.keySet",
+          args: [obj, key, value],
+          type: VOID,
+          loc,
+        },
         loc,
       };
     }
@@ -3085,7 +3272,13 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
       const loc = locOf(expr);
       return {
         kind: "exprStmt",
-        expr: { kind: "libCall", fn: "bytes.bigSet", args: [recv, index, value], type: VOID, loc },
+        expr: {
+          kind: "libCall",
+          fn: "bytes.bigSet",
+          args: [recv, index, value],
+          type: VOID,
+          loc,
+        },
         loc,
       };
     }
@@ -3145,7 +3338,12 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
         const litKey = recordKeyLiteralText(target.argumentExpression);
         let key: IrExpr =
           litKey !== null
-            ? { kind: "strLit", value: litKey, type: STRING, loc: locOf(target.argumentExpression) }
+            ? {
+                kind: "strLit",
+                value: litKey,
+                type: STRING,
+                loc: locOf(target.argumentExpression),
+              }
             : lowerer.lowerExpr(target.argumentExpression);
         key = lowerRecordPropertyKey(lowerer, key, target.argumentExpression);
         if (key.type.kind !== "string") {
@@ -3165,7 +3363,13 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
         }
         return {
           kind: "exprStmt",
-          expr: { kind: "libCall", fn: "dyn.keySet", args: [obj, key, value], type: VOID, loc },
+          expr: {
+            kind: "libCall",
+            fn: "dyn.keySet",
+            args: [obj, key, value],
+            type: VOID,
+            loc,
+          },
           loc,
         };
       }
@@ -3294,7 +3498,12 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
         const obj = lowerer.lowerExpr(target.expression);
         let key: IrExpr =
           litKey !== null
-            ? { kind: "strLit", value: litKey, type: STRING, loc: locOf(target.argumentExpression) }
+            ? {
+                kind: "strLit",
+                value: litKey,
+                type: STRING,
+                loc: locOf(target.argumentExpression),
+              }
             : lowerer.lowerExpr(target.argumentExpression);
         // Runtime number/boolean/dyn keys stringify — ToPropertyKey,
         // exactly the index-signature path's rule.
@@ -3397,7 +3606,12 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
       const litKey = recordKeyLiteralText(target.argumentExpression);
       let key: IrExpr =
         litKey !== null
-          ? { kind: "strLit", value: litKey, type: STRING, loc: locOf(target.argumentExpression) }
+          ? {
+              kind: "strLit",
+              value: litKey,
+              type: STRING,
+              loc: locOf(target.argumentExpression),
+            }
           : lowerer.lowerExpr(target.argumentExpression);
       key = lowerRecordPropertyKey(lowerer, key, target.argumentExpression);
       if (key.type.kind !== "string") {
@@ -3552,7 +3766,13 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
 export function lowerEnvironmentKey(lowerer: Lowerer, node: ts.Expression): IrExpr {
   const key = lowerer.lowerExpr(node);
   if (key.type.kind === "dyn")
-    return { kind: "libCall", fn: "dyn.toStringCoerce", args: [key], type: STRING, loc: key.loc };
+    return {
+      kind: "libCall",
+      fn: "dyn.toStringCoerce",
+      args: [key],
+      type: STRING,
+      loc: key.loc,
+    };
   return lowerRecordPropertyKey(lowerer, key, node);
 }
 
