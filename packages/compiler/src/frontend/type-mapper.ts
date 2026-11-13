@@ -5743,6 +5743,24 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     const elem = arg ? mapType(arg, ctx) : null;
     return elem ? iterableUnionType(elem, ctx.shapes, unions) : null;
   }
+  // ArrayLike<number>: what a reader of `length` and numeric indices takes
+  // from the program is a number array or a typed array of number
+  // elements, so the slot is the indexed union of those (indexed-unions.ts),
+  // which reads each arm's elements natively. A value of another shape
+  // (an object literal with a length, `arguments`) has no arm here and is
+  // refused where it flows in. Other element types keep no lowering.
+  if (isStdlibInterface("ArrayLike")) {
+    const arg = checker.getTypeArguments(widened as ts.TypeReference)[0];
+    const elem = arg ? mapType(arg, ctx) : null;
+    if (elem?.kind !== "f64") return null;
+    const arms: IrType[] = [
+      { kind: "array", elem: F64 },
+      ...(Object.keys(BYTES_ELEMENT_NAME) as (keyof typeof BYTES_ELEMENT_NAME)[]).map((e) =>
+        bytesOf(e),
+      ),
+    ];
+    return { kind: "union", unionId: unions.intern(arms) };
+  }
   // IteratorResult<T, TReturn> — the checker's type of `g.next()` (an
   // alias for IteratorYieldResult<T> | IteratorReturnResult<TReturn>):
   // maps to the SAME interned record genResume answers, so `const r =
@@ -11781,7 +11799,12 @@ function mapBoundRecordIntersection(type: ts.Type, ctx: TypeMapperCtx): IrType |
     const mapped = isParam ? resolveTypeParam(part) : mapType(part, ctx);
     if (!mapped || mapped.kind !== "record") return null;
     const shape = ctx.shapes.get(mapped.shapeId);
-    if (!shape || shape.tuple || shape.indexValue !== undefined || shape.accessorOrder !== undefined)
+    if (
+      !shape ||
+      shape.tuple ||
+      shape.indexValue !== undefined ||
+      shape.accessorOrder !== undefined
+    )
       return null;
     for (const field of shape.fields) {
       const previous = fields.get(field.name);
