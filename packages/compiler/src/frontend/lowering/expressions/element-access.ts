@@ -25,6 +25,9 @@ import {
   type SrcLoc,
   UNDEFINED_T,
   VOID,
+  BIGINT_T,
+  BYTES_ELEMENT_NAME,
+  isBigIntBytesElem,
   canBoxFuncIntoDyn,
   canDynCheckTo,
   isDynTypedRefType,
@@ -102,6 +105,7 @@ import {
   elementMayBeForeign,
   foreignElementThrow,
   lowerSafeBytesRead,
+  lowerSafeBigBytesRead,
   lowerSafeIndexRead,
   primitiveElement,
   unionArrayValueRead,
@@ -136,7 +140,7 @@ import {
   lowerIndexedUnionRead,
   lowerIndexedUnionWrite,
 } from "../indexed-unions.js";
-import { lowerBufferPrototypeMember } from "../containers/bytes.js";
+import { lowerBufferPrototypeMember, refuseBigIntBytes } from "../containers/bytes.js";
 import { refuseDefinedEnvWrite } from "../builtins/environment.js";
 import { nullishReadTypeError, throwAfterEach } from "../primitive-throws.js";
 
@@ -633,6 +637,8 @@ export function lowerElementAccess(lowerer: Lowerer, expr: ts.ElementAccessExpre
     if (index.type.kind !== "f64") {
       lowerer.unsupported("SC1090", expr.argumentExpression, "indexing with non-number keys");
     }
+    if (recv.type.kind === "bytes" && isBigIntBytesElem(recv.type.elem))
+      return lowerSafeBigBytesRead(lowerer, recv, index, locOf(expr));
     // `t[i]!` performs no runtime check, but its static type is a number:
     // it takes the numeric element read (NaN when invalid), except where
     // the value reaches a use that tells undefined from NaN (an equality, a
@@ -2405,6 +2411,7 @@ export function lowerElementCompoundParts(
   if (receiverType?.kind !== "array" && receiverType?.kind !== "bytes") {
     lowerer.unsupported("SC1090", target, "compound assignment to non-array elements");
   }
+  refuseBigIntBytes(lowerer, receiverType, target, "compound assignment of an element");
   let receiver = checked;
   if (receiver.type.kind === "union" && lowerer.armTag(receiver.type.unionId, UNDEFINED_T) >= 0) {
     const present = lowerer.stripUndefinedArm(receiver.type);
@@ -3065,6 +3072,22 @@ export function lowerElementWrite(lowerer: Lowerer, expr: ts.BinaryExpression): 
     }
     if (index.type.kind !== "f64") {
       lowerer.unsupported("SC1090", target.argumentExpression, "indexing with non-number keys");
+    }
+    if (isBigIntBytesElem(recv.type.elem)) {
+      // The element write takes the bigint's low 64 bits; an invalid index
+      // ignores the write after evaluating the value, as in JavaScript.
+      if (split !== null)
+        lowerer.noLowering(
+          `${BYTES_ELEMENT_NAME[recv.type.elem]} writes at an index that may be undefined`,
+          target.argumentExpression,
+        );
+      const value = lowerer.lowerExprExpecting(expr.right, BIGINT_T);
+      const loc = locOf(expr);
+      return {
+        kind: "exprStmt",
+        expr: { kind: "libCall", fn: "bytes.bigSet", args: [recv, index, value], type: VOID, loc },
+        loc,
+      };
     }
     const value = lowerer.lowerExprExpecting(expr.right, F64);
     if (split === null) return { kind: "bytesSet", arr: recv, index, value, loc: locOf(expr) };

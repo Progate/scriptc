@@ -397,6 +397,7 @@ import {
   DYN,
   DYN_HANDLE_KINDS,
   F64,
+  isBigIntBytesElem,
   isDynTypedRefType,
   isJsonSafeType,
   isJsonStringifySafeType,
@@ -9405,9 +9406,10 @@ export class Lowerer {
       {
         symbolOf,
         declarationOf: (symbol) => symbol.valueDeclaration,
+        // A BigInt typed array's elements are bigints, never NaN-coded.
         bytesElemOf: (receiver) => {
           const t = mappedOrNull(receiver);
-          return t?.kind === "bytes" ? t.elem : null;
+          return t?.kind === "bytes" && !isBigIntBytesElem(t.elem) ? t.elem : null;
         },
         isNumberRecordRead: (read) => this.optionalIndexSignatureRead(read)?.kind === "f64",
         isNumber: (node) => mappedOrNull(node)?.kind === "f64",
@@ -15556,6 +15558,7 @@ export class Lowerer {
   }
 
   typeOf(node: ts.Node): ts.Type {
+    this.lastTypedNode = node;
     if (this.speculativeTypeQueryDepth === 0 || this.speculativeCollectionDepth > 0)
       return this.typeOfNode(node);
     return this.typeOfSpeculatively(node);
@@ -15902,9 +15905,27 @@ export class Lowerer {
    * retains interface-view substitutions while sharing ABI normalization. */
   mapTypeOf(t: ts.Type, mapper?: (type: ts.Type) => IrType | null): IrType | null {
     const mapped = mapper ? mapper(t) : mapType(t, this.typeCtx);
+    if (mapped !== null && this.javaScriptBigIntBytes(mapped)) return null;
     return mapped === null || mapped.kind === "func"
       ? (jsArgumentsFunctionType(this, t) ?? mapped)
       : mapped;
+  }
+
+  /** The node whose type typeOf answered last. */
+  private lastTypedNode: ts.Node | null = null;
+
+  /** Whether `mapped`, the mapping of the type typeOf answered last, is a
+   * BigInt typed array (or a union with one) in a JavaScript source. There
+   * it keeps the checked value, as an unmapped type does: the runtime build
+   * that holds the BigInt element kinds answers the whole typed-array
+   * surface, where typed code lowers only its native subset. */
+  private javaScriptBigIntBytes(mapped: IrType): boolean {
+    const arms = mapped.kind === "union" ? (this.unions.get(mapped.unionId)?.arms ?? []) : [mapped];
+    return (
+      arms.some((arm) => arm.kind === "bytes" && isBigIntBytesElem(arm.elem)) &&
+      this.lastTypedNode !== null &&
+      isJsSourceFile(ts.getSourceFileOfNode(this.lastTypedNode))
+    );
   }
 
   /** The runtime type of a record member slot typed `t`: an overloaded

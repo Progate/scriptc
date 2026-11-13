@@ -20,6 +20,7 @@
 import * as ts from "../ts7/adapter.js";
 import { withoutParentheses } from "../outer-expressions.js";
 import {
+  BIGINT_BYTES_NAMES,
   BYTES_ELEMENT_NAME,
   DYN,
   F64,
@@ -218,7 +219,10 @@ export function jsSpecialGlobalValue(
     return { kind: "libCall", fn: "arrayBuffer.constructor", args: [], type: DYN, loc };
   if (name === "Array")
     return { kind: "libCall", fn: "dyn.arrayConstructor", args: [], type: DYN, loc };
-  if ((Object.values(BYTES_ELEMENT_NAME) as string[]).includes(name))
+  if (
+    (Object.values(BYTES_ELEMENT_NAME) as string[]).includes(name) &&
+    !BIGINT_BYTES_NAMES.has(name)
+  )
     return {
       kind: "libCall",
       fn: "bytes.constructor",

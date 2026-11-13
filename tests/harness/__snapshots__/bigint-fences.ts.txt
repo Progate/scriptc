@@ -1,40 +1,31 @@
-bigint-fences.ts:3:7 - error SC2020: 'BigInt64Array<ArrayBuffer>' is part of the standard library types but has no scriptc lowering yet
+bigint-fences.ts:7:1 - error SC2020: '.fill() on a BigInt64Array' is part of the standard library types but has no scriptc lowering yet
 
-  2 | // explicit refusals until their own coherent families land.
-  3 | const typed = new BigInt64Array(4);
-    |       ^~~~~
-  4 | const dynamicValue: unknown = 1n;
+  6 | typed[0] = 1n;
+  7 | typed.fill(2n);
+    | ^~~~~~~~~~~~~~
+  8 | for (const element of typed) console.log(element);
 
-  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
+  hint: a BigInt typed array supports element reads and writes, Atomics, length, byteLength, byteOffset and buffer
 
-bigint-fences.ts:3:15 - error SC2020: 'new BigInt64Array' is part of the standard library types but has no scriptc lowering yet
+bigint-fences.ts:8:23 - error SC2020: 'for-of on a BigInt64Array' is part of the standard library types but has no scriptc lowering yet
 
-  2 | // explicit refusals until their own coherent families land.
-  3 | const typed = new BigInt64Array(4);
-    |               ^~~~~~~~~~~~~~~~~~~~
-  4 | const dynamicValue: unknown = 1n;
+  7 | typed.fill(2n);
+  8 | for (const element of typed) console.log(element);
+    |                       ^~~~~
+  9 | const dynamicValue: unknown = 1n;
 
-  hint: the type checker sees the full standard library, but only the supported surface compiles (https://scriptc.dev/limitations)
+  hint: a BigInt typed array supports element reads and writes, Atomics, length, byteLength, byteOffset and buffer
 
-bigint-fences.ts:8:28 - error SC1090: JSON.stringify of 'bigint' values (only number, string, boolean, records, arrays, unions of those, and 'unknown' stringify) are not supported yet
+bigint-fences.ts:13:28 - error SC1090: JSON.stringify of 'bigint' values (only number, string, boolean, records, arrays, unions of those, and 'unknown' stringify) are not supported yet
 
-  7 | keyed.set(1n, "one");
-  8 | console.log(JSON.stringify(1n));
-    |                            ^~
-  9 | 
+  12 | keyed.set(1n, "one");
+  13 | console.log(JSON.stringify(1n));
+     |                            ^~
+  14 | 
 
-bigint-fences.ts:14:14 - error SC1090: BigIntStats methods as values (call 'isFile' directly) are not supported yet
+bigint-fences.ts:19:14 - error SC1090: BigIntStats methods as values (call 'isFile' directly) are not supported yet
 
-  13 | // has no lowering.
-  14 | const read = stats.isFile;
+  18 | // has no lowering.
+  19 | const read = stats.isFile;
      |              ^~~~~~~~~~~~
-  15 | console.log(stats.size);
-
-bigint-fences.ts:17:6 - error SC2004: uses of 'typed' inherit the blocker on its declaration
-
-  16 | 
-  17 | void typed;
-     |      ^~~~~
-  18 | void dynamicValue;
-
-  hint: the declaration of 'typed' did not compile — fix the diagnostic reported there and these sites clear with it
+  20 | console.log(stats.size);

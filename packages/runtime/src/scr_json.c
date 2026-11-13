@@ -22421,8 +22421,8 @@ ScrBytes *scr_array_buffer_view(ScrBytesElem elem, const ScrDyn *buffer,
   off = isnan(off) ? 0 : trunc(off);
   if (off < 0 || off > 9007199254740991.0 ||
       fmod(off, (double)scr_bytes_elem_size(elem)) != 0) {
-    static const char msg[] = "Invalid typed array buffer range";
-    scr_throw_error_msg(SCR_ERR_RANGE, msg, sizeof msg - 1);
+    /* Before the length converts, as in Node. */
+    scr_bytes_view_range_throw(elem, off, false, 0, 0);
     return NULL;
   }
   bool has_len = length->kind != SCR_DYN_UNDEF;

@@ -264,6 +264,11 @@ void scr_bytes_copy_brand(ScrBytes *dst, const ScrBytes *src);
  * byte storage, including when src is itself a subarray. */
 ScrBytes *scr_bytes_buffer_view(ScrBytes *src, ScrBytesElem elem,
                                double offset, bool has_len, double length);
+/* Node's RangeError for a typed-array view of `elem` that the offset (a
+ * truncated ToIndex), the length (has_len, count) or the buffer's byte
+ * length (available) rules out, by the first check that fails. */
+void scr_bytes_view_range_throw(ScrBytesElem elem, double off, bool has_len, double count,
+                                double available);
 ScrDyn *scr_array_buffer_constructor(void);
 ScrDyn *scr_array_buffer_new(ScrDyn *length);
 ScrDyn *scr_array_buffer_from_bytes(ScrBytes *view);

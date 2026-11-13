@@ -28,6 +28,7 @@ import {
   arrayOf,
   bytesOf,
   funcOf,
+  isBigIntBytesElem,
   isUnitType,
   typeEquals,
 } from "../../../ir/ir.js";
@@ -681,6 +682,14 @@ export function lowerBytesNew(
   if (symbol && ts.symbolName(symbol) === "DataView" && lowerer.isStdlibSymbol(symbol)) {
     return lowerDataViewNew(lowerer, expr);
   }
+  const bigElem = symbol ? own(BIGINT_BYTES_CTORS, ts.symbolName(symbol)) : undefined;
+  if (
+    bigElem &&
+    symbol &&
+    lowerer.isStdlibSymbol(symbol) &&
+    !isJsSourceFile(ts.getSourceFileOfNode(expr))
+  )
+    return lowerBigIntBytesNew(lowerer, expr, bigElem);
   const elem = symbol ? own(BYTES_CTORS, ts.symbolName(symbol)) : undefined;
   if (!elem || !symbol || !lowerer.isStdlibSymbol(symbol)) return null;
   const name = ts.symbolName(symbol);
@@ -908,15 +917,88 @@ function lowerBytesOf(lowerer: Lowerer, call: ts.CallExpression, elem: IrBytesEl
   };
 }
 
+/** Refuses `what` on a BigInt64Array or BigUint64Array (an IR type whose
+ * bytes arm, or any of whose union arms, holds bigint elements): only their
+ * element reads and writes, Atomics, construction, length, byteLength,
+ * byteOffset, buffer and BYTES_PER_ELEMENT lower. */
+export function refuseBigIntBytes(
+  lowerer: Lowerer,
+  type: IrType | null | undefined,
+  node: ts.Node,
+  what: string,
+): void {
+  if (!type) return;
+  const arms = type.kind === "union" ? (lowerer.unions.get(type.unionId)?.arms ?? []) : [type];
+  const big = arms.find((arm) => arm.kind === "bytes" && isBigIntBytesElem(arm.elem));
+  if (big?.kind !== "bytes" || isJsSourceFile(ts.getSourceFileOfNode(node))) return;
+  lowerer.noLowering(
+    `${what} on a ${BYTES_ELEMENT_NAME[big.elem]}`,
+    node,
+    "a BigInt typed array supports element reads and writes, Atomics, length, byteLength, byteOffset and buffer",
+  );
+}
+
+/** The BigInt typed-array constructors by lib interface name. A JavaScript
+ * source constructs them through the checked-dynamic constructor value
+ * instead (lower-classes.ts). */
+const BIGINT_BYTES_CTORS: Record<string, "i64" | "u64" | undefined> = {
+  BigInt64Array: "i64",
+  BigUint64Array: "u64",
+};
+
+/** Whether the checker types `node` as an ArrayBuffer or SharedArrayBuffer
+ * (or a union of the two, such as ArrayBufferLike). */
+function isArrayBufferStorage(lowerer: Lowerer, node: ts.Expression): boolean {
+  const type = lowerer.typeOf(node);
+  const members = type.isUnionType() ? constituentTypes(type) : [type];
+  return members.every((member) => {
+    const symbol = member.getSymbol();
+    return (
+      symbol !== undefined &&
+      (ts.symbolName(symbol) === "ArrayBuffer" || ts.symbolName(symbol) === "SharedArrayBuffer") &&
+      lowerer.isStdlibSymbol(symbol)
+    );
+  });
+}
+
+/** `new BigInt64Array(length)`, `new BigInt64Array(buffer)` and
+ * `new BigInt64Array(buffer, byteOffset, length?)` over an ArrayBuffer or
+ * SharedArrayBuffer (a view of the buffer's storage), and the same for
+ * BigUint64Array. Every form is one runtime view call, which takes a number
+ * as a length and checks the offset's alignment and the range as Node
+ * does. Other sources (arrays, iterables, other typed arrays) are refused:
+ * their elements would have to convert to bigints. */
+function lowerBigIntBytesNew(
+  lowerer: Lowerer,
+  expr: ts.NewExpression,
+  elem: "i64" | "u64",
+): IrExpr {
+  const name = BYTES_ELEMENT_NAME[elem];
+  const loc = locOf(expr);
+  const args = expr.arguments?.nodes ?? [];
+  const supported = `supported: new ${name}(length), or (ArrayBuffer | SharedArrayBuffer, byteOffset?, length?)`;
+  if (args.length > 3 || args.some(ts.isSpreadElement))
+    lowerer.noLowering(`new ${name} with these arguments`, expr, supported);
+  const source = args[0];
+  if (source === undefined) return lowerArrayBufferView(lowerer, [], elem, loc, numLit(0, loc));
+  const sourceType = lowerer.mapTypeOf(lowerer.typeOf(source));
+  const length = sourceType?.kind === "f64" && args.length === 1;
+  if (!length && !isArrayBufferStorage(lowerer, source))
+    lowerer.noLowering(`new ${name} over this source`, source, supported);
+  return lowerArrayBufferView(lowerer, args, elem, loc);
+}
+
 /** Construct a view over the complete branded backing allocation. */
 function lowerArrayBufferView(
   lowerer: Lowerer,
   args: readonly ts.Expression[],
   elem: IrBytesElem | "dv",
   loc: SrcLoc,
+  source?: IrExpr,
 ): IrExpr {
   const values = [0, 1, 2].map((index) => {
     const node = args[index];
+    if (index === 0 && source !== undefined) return lowerer.coerceToExpected(source, DYN);
     return node ? lowerer.coerceInto(node, lowerer.lowerExpr(node), DYN) : dynUndefinedExpr(loc);
   });
   const fn = {
@@ -930,6 +1012,8 @@ function lowerArrayBufferView(
     f16: "arrayBuffer.viewF16",
     f32: "arrayBuffer.viewF32",
     f64: "arrayBuffer.viewF64",
+    i64: "arrayBuffer.viewI64",
+    u64: "arrayBuffer.viewU64",
     dv: "arrayBuffer.viewDV",
   } as const;
   return {
@@ -1197,10 +1281,13 @@ export function lowerBytesMethodCall(
   const name = access.name.text;
   const receiverIr = lowerer.mapTypeOf(lowerer.typeOf(access.expression));
   const unionArms = receiverIr ? indexedUnionArms(lowerer, receiverIr) : null;
-  if (unionArms && allBytesArms(unionArms) && lowerer.isStdlibMember(access))
+  if (unionArms && allBytesArms(unionArms) && lowerer.isStdlibMember(access)) {
+    refuseBigIntBytes(lowerer, receiverIr, call, `.${name}()`);
     return lowerUnionBytesMethodCall(lowerer, call, access, name);
+  }
   if (receiverIr?.kind !== "bytes") return null;
   if (!lowerer.isStdlibMember(access)) return null;
+  refuseBigIntBytes(lowerer, receiverIr, call, `.${name}()`);
   const loc = locOf(call);
   const nArgs = call.arguments.nodes.length;
   // In JavaScript, copy, toString, slice and subarray called with an offset

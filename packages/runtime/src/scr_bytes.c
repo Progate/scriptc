@@ -1523,6 +1523,32 @@ ScrBytes *scr_dataview_new(ScrBytes *src, double byte_off, bool has_len, double 
   return v;
 }
 
+void scr_bytes_view_range_throw(ScrBytesElem elem, double off, bool has_len, double count,
+                                double available) {
+  /* The checks in the order InitializeTypedArrayFromArrayBuffer makes them:
+   * ToIndex of the offset, its alignment, ToIndex of the length, then the
+   * buffer's length against the view. */
+  size_t width = scr_bytes_elem_size(elem);
+  const char *name = scr_bytes_elem_name(elem);
+  char num[32];
+  char msg[128];
+  int mlen;
+  bool bad_offset = !(off >= 0) || off > 9007199254740991.0;
+  if (!bad_offset && fmod(off, (double)width) != 0) {
+    mlen = snprintf(msg, sizeof msg, "start offset of %s should be a multiple of %zu", name, width);
+  } else if (!bad_offset && has_len) {
+    size_t numlen = scr_f64_to_str(count, num);
+    mlen = snprintf(msg, sizeof msg, "Invalid typed array length: %.*s", (int)numlen, num);
+  } else if (!bad_offset && fmod(available, (double)width) != 0) {
+    mlen = snprintf(msg, sizeof msg, "byte length of %s should be a multiple of %zu", name, width);
+  } else {
+    size_t numlen = scr_f64_to_str(off, num);
+    mlen = snprintf(msg, sizeof msg, "Start offset %.*s is outside the bounds of the buffer",
+                    (int)numlen, num);
+  }
+  scr_throw_error_msg(SCR_ERR_RANGE, msg, (size_t)mlen);
+}
+
 ScrBytes *scr_bytes_buffer_view(ScrBytes *src, ScrBytesElem elem,
                                double offset, bool has_len, double length) {
   ScrBytes *owner = src->backing ? src->backing : src;
@@ -1544,8 +1570,7 @@ ScrBytes *scr_bytes_buffer_view(ScrBytes *src, ScrBytesElem elem,
        !scr_js_owner_resizable(owner) &&
 #endif
        fmod(available - off, (double)width) != 0)) {
-    static const char msg[] = "Invalid typed array buffer range";
-    scr_throw_error_msg(SCR_ERR_RANGE, msg, sizeof msg - 1);
+    scr_bytes_view_range_throw(elem, off, has_len, count, available);
     return NULL;
   }
   ScrBytes *view = scr_dataview_new(owner, off, true,

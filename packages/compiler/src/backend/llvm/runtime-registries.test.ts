@@ -120,7 +120,10 @@ test("DYN_INDEX_SET matches ScrDynIndexSet", () => {
 });
 
 test("BYTES_ELEM_NUM matches ScrBytesElem", () => {
-  const elems = cEnum("scr_bytes.h", "ScrBytesElem", []);
+  // The BigInt kinds are numbered by the SCR_JS_OBJECT_MODEL build, which a
+  // program holding one links; the next test pins the other kinds to the
+  // plain build's numbers.
+  const elems = cEnum("scr_bytes.h", "ScrBytesElem", ["SCR_JS_OBJECT_MODEL"]);
   expectDistinct(elems, "ScrBytesElem");
   expect(Object.keys(BYTES_ELEM_NUM).length).toBe(elems.size);
   for (const [name, value] of Object.entries(BYTES_ELEM_NUM)) {

@@ -309,6 +309,10 @@ export const BYTES_ELEM_NUM: Record<IrBytesElem, number> = {
   i16: 7,
   u8c: 8,
   f16: 9,
+  // The BigInt kinds exist in the JavaScript object model build only, which
+  // a program that holds one links (runtime feature bigintBytes).
+  i64: 10,
+  u64: 11,
 };
 
 /** The payload marker of an ABSENT record field slot (IR fieldAbsent): the

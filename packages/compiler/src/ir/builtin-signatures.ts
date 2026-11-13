@@ -1764,6 +1764,14 @@ function buildLibFnSignatures() {
     "atomics.wait": { argTypes: [bytesOf("i32"), F64, F64, F64], result: STRING },
     "atomics.notify": { argTypes: [bytesOf("i32"), F64, F64], result: F64 },
     "atomics.op": { argTypes: [null, F64, F64, F64, F64], result: F64 },
+    /** An Atomics operation (load, store, exchange, compareExchange, add,
+     * sub, and, or, xor by the atomics.op numbering) on a BigInt64Array or
+     * BigUint64Array element at an index the caller checked: one
+     * sequentially consistent 64-bit atomic instruction. The bigint
+     * operands wrap to 64 bits; the result is the element's previous value
+     * as a bigint of the array's signedness (+1), or the stored operand
+     * itself for store. Borrowed arguments; never throws. */
+    "atomics.bigOp": { argTypes: [null, F64, BIGINT_T, BIGINT_T, F64], result: BIGINT_T },
     "atomics.opDyn": { argTypes: [DYN, F64, F64, F64, F64], result: F64 },
     "atomics.waitDyn": { argTypes: [DYN, F64, F64, F64], result: STRING },
     "atomics.notifyDyn": { argTypes: [DYN, F64, F64], result: F64 },
@@ -4661,6 +4669,8 @@ function buildLibFnSignatures() {
     "arrayBuffer.viewF16": { argTypes: [DYN, DYN, DYN], result: bytesOf("f16") },
     "arrayBuffer.viewF32": { argTypes: [DYN, DYN, DYN], result: bytesOf("f32") },
     "arrayBuffer.viewF64": { argTypes: [DYN, DYN, DYN], result: bytesOf("f64") },
+    "arrayBuffer.viewI64": { argTypes: [DYN, DYN, DYN], result: bytesOf("i64") },
+    "arrayBuffer.viewU64": { argTypes: [DYN, DYN, DYN], result: bytesOf("u64") },
     "arrayBuffer.viewDV": { argTypes: [DYN, DYN, DYN], result: BYTES_U8 },
     /** Object.keys/values/entries over a CHECKED-DYNAMIC receiver
      * (scr_json.c): the runtime walks the dyn node's own members in JS
@@ -6151,6 +6161,15 @@ function buildLibFnSignatures() {
     /** Whether two typed arrays share no byte: their element ranges in
      * memory do not overlap. Borrowed args of any element kind; never throws. */
     "bytes.disjoint": { argTypes: [null, null], result: BOOL },
+    /** A BigInt64Array or BigUint64Array element read at an index the
+     * caller checked (an integer in [0, length)): the element as a bigint of
+     * the array's signedness (+1). Borrowed receiver; never throws. */
+    "bytes.bigGet": { argTypes: [null, F64], result: BIGINT_T },
+    /** A BigInt64Array or BigUint64Array element write: the bigint's low 64
+     * bits, which is BigInt.asIntN(64) or asUintN(64) of it. A write at an
+     * index that is not an integer in [0, length) is ignored, as in
+     * JavaScript. Borrowed arguments; never throws. */
+    "bytes.bigSet": { argTypes: [null, F64, BIGINT_T], result: VOID },
     /** The absent Buffer result itself (NULL), where an error-path callback
      * body passes its undefined result on into a Buffer slot. Owned (+1);
      * never throws. */

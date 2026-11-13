@@ -23,6 +23,7 @@ import {
   iterableArmsElem,
   BIGINT_STATS_T,
   BYTES_ELEMENT_NAME,
+  isBigIntBytesElem,
   BOOL,
   BYTES_U8,
   bytesOf,
@@ -2189,6 +2190,11 @@ function validateFunction(
         }
         if (e.from && e.source?.type.kind !== "dyn")
           err("bytesNew from requires a dyn source", e.loc);
+        // A BigInt64Array or BigUint64Array is constructed through
+        // arrayBuffer.viewI64 or viewU64, the calls that select the runtime
+        // build holding its element kind.
+        if (isBigIntBytesElem(e.type.elem))
+          err(`bytesNew of a ${BYTES_ELEMENT_NAME[e.type.elem]}`, e.loc);
         break;
       }
       case "bytesIntrinsic": {
@@ -2198,6 +2204,19 @@ function validateFunction(
           break;
         }
         const recv = e.receiver.type;
+        // A BigInt64Array or BigUint64Array answers only its length and
+        // where it sits in its buffer here: its elements are bigints, which
+        // the numeric typed-array methods cannot hold.
+        if (
+          isBigIntBytesElem(recv.elem) &&
+          e.method !== "length" &&
+          e.method !== "buffer" &&
+          e.method !== "byteOffset" &&
+          e.method !== "byteLength"
+        ) {
+          err(`bytesIntrinsic ${e.method} on a ${BYTES_ELEMENT_NAME[recv.elem]}`, e.loc);
+          break;
+        }
         // The DataView getters and setters use a bytes<u8>
         // view; dataViewNew and byteOffset take ANY elem kind (views form
         // over any typed array's storage, owners answer byteOffset 0).
@@ -4263,6 +4282,12 @@ function validateFunction(
         !["u8", "i8", "u16", "i16", "u32", "i32"].includes(e.args[0].type.elem))
     ) {
       errors.push({ message: "integer Atomics require an integer typed array", loc: e.loc });
+    }
+    if (
+      (e.fn === "atomics.bigOp" || e.fn === "bytes.bigGet" || e.fn === "bytes.bigSet") &&
+      (e.args[0]?.type.kind !== "bytes" || !isBigIntBytesElem(e.args[0].type.elem))
+    ) {
+      errors.push({ message: `${e.fn} requires a BigInt typed array`, loc: e.loc });
     }
     if (e.fn === "worker.new" && !workers)
       errors.push({ message: "Worker construction requires worker execution mode", loc: e.loc });
@@ -7084,6 +7109,8 @@ function validateFunction(
         expectType(s.value, F64, "bytesSet value");
         if (s.arr.type.kind !== "bytes") {
           err(`bytesSet on non-bytes ${s.arr.type.kind}`, s.loc);
+        } else if (isBigIntBytesElem(s.arr.type.elem)) {
+          err(`bytesSet on a ${BYTES_ELEMENT_NAME[s.arr.type.elem]}`, s.loc);
         }
         break;
       }
