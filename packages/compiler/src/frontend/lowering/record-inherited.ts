@@ -340,8 +340,9 @@ function inheritedMethodImpl(
   lowerer.arrHofHelpers.set(key, name);
   const recT: IrType = { kind: "record", shapeId };
   const o = varRef("o.0", recT, loc);
-  const params = fnType.params.map((type, i) => ({ localId: `p${i}.0`, name: `p${i}`, type }));
-  const args = params.map((p) => varRef(p.localId, p.type, loc));
+  const declared = fnType.params.map((type, i) => ({ localId: `p${i}.0`, name: `p${i}`, type }));
+  const args = declared.map((p) => varRef(p.localId, p.type, loc));
+  const params = [...declared, ...hiddenRestParam(fnType)];
   const body: IrStmt[] = [];
   const hidden = liftedLocals();
   const answer = builtinAnswer(lowerer, hidden.declare, o, shapeId, method, args, fnType.ret, loc);
@@ -362,6 +363,16 @@ function inheritedMethodImpl(
   return name;
 }
 
+/** The hidden argument array a checked-dynamic variadic signature (`(...args:
+ * any[]) => R`) passes after its named parameters: a built-in read as a
+ * value of that type takes it, and its answer ignores it, as the built-in
+ * ignores surplus arguments. */
+function hiddenRestParam(fnType: FuncType): { localId: string; name: string; type: IrType }[] {
+  return fnType.rest === true && fnType.restAbi === undefined
+    ? [{ localId: "rest.0", name: "args", type: DYN }]
+    : [];
+}
+
 /** One built-in as a plain function value (no receiver): its answer for an
  * undefined `this`, converted like inheritedMethodImpl's. */
 function unboundMethodImpl(
@@ -375,8 +386,9 @@ function unboundMethodImpl(
   if (existing) return existing;
   const name = keyedHelperName(lowerer, `%obj.${method}`, key);
   lowerer.arrHofHelpers.set(key, name);
-  const params = fnType.params.map((type, i) => ({ localId: `p${i}.0`, name: `p${i}`, type }));
-  const arg: IrExpr | undefined = params[0] && varRef(params[0].localId, params[0].type, loc);
+  const declared = fnType.params.map((type, i) => ({ localId: `p${i}.0`, name: `p${i}`, type }));
+  const arg: IrExpr | undefined = declared[0] && varRef(declared[0].localId, declared[0].type, loc);
+  const params = [...declared, ...hiddenRestParam(fnType)];
   const coerce = "Cannot convert undefined or null to object";
   let answer: IrExpr;
   switch (method) {
