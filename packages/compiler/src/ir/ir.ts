@@ -731,7 +731,12 @@ export function isIdentityCollectionKey(t: IrType): boolean {
     // JS promise identity; the runtime's scr_promise_{retain,release,trace}_v
     // adapters already serve Map values and boxed captures.
     t.kind === "promise" ||
-    t.kind === "date"
+    t.kind === "date" ||
+    // A typed array (or Buffer, or DataView) is one view object for its
+    // whole life: the checked-dynamic box and its extraction share it, so
+    // pointer identity is JS identity. Views never point back at a
+    // collection, so their keys need no tracing.
+    t.kind === "bytes"
   );
 }
 
