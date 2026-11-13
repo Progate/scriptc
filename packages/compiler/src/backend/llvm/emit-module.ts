@@ -1427,7 +1427,9 @@ export function emitModuleParts(emitter: LlEmitter): string[] {
   }
   if (emitter.abortFrames) out.push(...abortFramesDefinition(FN_ATTRS));
   const entryStart = out.length;
-  out.push(
+  // Built as an array first: the spread tables (stamps, releases) can hold
+  // more lines than a call can take as arguments.
+  const entryLines: string[] = [
     `define i32 @${emitter.mod.workers ? "sc_context_entry" : emitter.wasi ? "__main_argc_argv" : "main"}(i32 %argc, ptr %argv) ${FN_ATTRS} {`,
     `entry:`,
     ...(emitter.runtimeAbiMarker ? [`  call void @${RUNTIME_ABI_MARKER}()`] : []),
@@ -1585,7 +1587,8 @@ export function emitModuleParts(emitter: LlEmitter): string[] {
       : [`  %native_exit = call i32 @scr_exit_code_hint_get()`, `  ret i32 %native_exit`]),
     `}`,
     ``,
-  );
+  ];
+  for (const line of entryLines) out.push(line);
   // Inline RC helpers are emitted here rather than with the other helpers;
   // the start-up section claims them with the rest of the text appended after
   // the listed definitions (below).
