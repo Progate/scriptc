@@ -55,12 +55,19 @@ function undefinedOnly(lowerer: Lowerer, t: IrType): boolean {
 function armedVoidPromiseOf(
   lowerer: Lowerer,
   t: IrType,
+  allowNull = false,
 ): { unionId: string; tag: number; promise: IrType & { kind: "promise" } } | null {
   if (t.kind !== "union") return null;
   const armed = promiseOrUnitUnionOf(lowerer, t);
   if (!armed) return null;
   if (!undefinedOnly(lowerer, armed.promise.inner)) return null;
-  if (armed.def.arms.some((a, i) => i !== armed.promiseTag && a.kind !== "undefinedT")) return null;
+  if (
+    armed.def.arms.some(
+      (a, i) =>
+        i !== armed.promiseTag && a.kind !== "undefinedT" && !(allowNull && a.kind === "nullT"),
+    )
+  )
+    return null;
   return { unionId: armed.def.id, tag: armed.promiseTag, promise: armed.promise };
 }
 
@@ -1256,7 +1263,9 @@ export function lowerPromiseStaticCall(
     // `Promise.all(xs)` over `(Promise<void> | undefined)[]` — the `?.`
     // shape, whose undefined entries a Node Promise.all treats as
     // already-fulfilled undefined values.
-    const armedAll = armedVoidPromiseAll(lowerer, entries, loc);
+    // A null entry (`(Promise<void> | null)[]`) fulfills as null, which
+    // only differs from the undefined entry in a result nothing reads.
+    const armedAll = armedVoidPromiseAll(lowerer, entries, loc, promiseAllValueUnread(call));
     if (armedAll) return armedAll;
     // A tuple-typed value (`const pair = [a(), b()] as const`): the
     // same entries as the literal, read from the value.
@@ -1953,10 +1962,15 @@ function armedVoidPromiseAllLiteral(lowerer: Lowerer, elems: IrExpr[], loc: SrcL
  * its promise arm widened to `Promise<void>`, its undefined arm an
  * already-fulfilled undefined. The result carries none of them, so it
  * types as `Promise<void>` like an all-void array. */
-function armedVoidPromiseAll(lowerer: Lowerer, entries: IrExpr, loc: SrcLoc): IrExpr | null {
+function armedVoidPromiseAll(
+  lowerer: Lowerer,
+  entries: IrExpr,
+  loc: SrcLoc,
+  allowNull = false,
+): IrExpr | null {
   const entriesT = entries.type;
   if (entriesT.kind !== "array") return null;
-  const armed = armedVoidPromiseOf(lowerer, entriesT.elem);
+  const armed = armedVoidPromiseOf(lowerer, entriesT.elem, allowNull);
   if (!armed) return null;
   const voidPromise: IrType & { kind: "promise" } = { kind: "promise", inner: VOID };
   const joinedT = arrayOf(voidPromise);
