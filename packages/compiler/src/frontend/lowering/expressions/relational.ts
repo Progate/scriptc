@@ -906,6 +906,9 @@ export function lowerInstanceOf(lowerer: Lowerer, expr: ts.BinaryExpression, loc
       stdlibGlobalNameOf(lowerer, expr.right) === "MessagePort" ||
       (rhsBuiltin?.module === "worker_threads" && rhsBuiltin.member === "MessagePort")
     ) {
+      // The test lives in the worker runtime units, which a program that
+      // never makes a port would otherwise not link.
+      lowerer.usesWorkers = true;
       const value = lowerer.coerceInto(expr.left, lowerer.lowerExpr(expr.left), DYN);
       return { kind: "libCall", fn: "worker.isMessagePort", args: [value], type: BOOL, loc };
     }

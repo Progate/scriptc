@@ -1338,6 +1338,29 @@ export function lowerPropertyAccessExpr(
   // fence-first order: a stored-member undefined would mis-answer
   // them, and calls dispatch through the dyn method machinery
   // instead.
+  // `.length` of an array whose element type has no mapping of its own
+  // (`MessagePort[]` under the DOM declaration of the port): the value
+  // lowers to the array or checked-dynamic value it is, which has a length.
+  if (
+    expr.name.text === "length" &&
+    !expr.questionDotToken &&
+    lowerer.checker.isArrayType(lowerer.typeOf(expr.expression)) &&
+    lowerer.mapTypeOf(lowerer.typeOf(expr.expression)) === null
+  ) {
+    const recv = tryLowerExpression(lowerer, expr.expression);
+    if (recv?.type.kind === "array")
+      return { kind: "arrIntrinsic", method: "length", receiver: recv, args: [], type: F64, loc };
+    if (recv?.type.kind === "dyn") {
+      const read: IrExpr = {
+        kind: "dynKeyGet",
+        key: { kind: "strLit", value: "length", type: STRING, loc: locOf(expr.name) },
+        value: recv,
+        type: DYN,
+        loc,
+      };
+      return { kind: "dynCheck", value: read, type: F64, loc };
+    }
+  }
   if (
     (isJsSourceFile(ts.getSourceFileOfNode(expr)) &&
       (lowerer.mapTypeOf(lowerer.typeOf(expr.expression)) === null ||

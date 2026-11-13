@@ -1,0 +1,6 @@
+{
+ "order": [
+  "<repo>/tests/corpus/message-port-arrays-without-ports/main.ts"
+ ],
+ "diags": []
+}
