@@ -5,7 +5,9 @@ import { join } from "node:path";
 /** SDKs are packaging inputs. Library consumers only need the resulting objects. */
 export function mobileRuntimeConfig(name, env = process.env, platform = process.platform) {
   const common = {
-    libraryOnly: true,
+    // SCRIPTC_MOBILE_EXECUTABLES=1 also builds the executable flavors, for a
+    // program object an app links and starts on a thread of its own.
+    libraryOnly: env.SCRIPTC_MOBILE_EXECUTABLES !== "1",
     runtimeDefines: ["_GNU_SOURCE"],
     threadArgs: ["-pthread"],
     compileFlags: ["-ffunction-sections", "-fdata-sections"],
@@ -36,6 +38,8 @@ export function mobileRuntimeConfig(name, env = process.env, platform = process.
       },
       targetArgs: ["-target", triple, "-isysroot", sysroot],
       systemLibraries: [{ name: "System", predicate: true }],
+      // An iOS app cannot start other processes: child_process has no unit.
+      omitRuntimeSources: ["scr_child.c"],
     };
   }
   if (name !== "android-arm64") throw new Error(`unsupported mobile runtime pack: ${name}`);
