@@ -1252,6 +1252,9 @@ const TDZ_KINDS = new Set<IrType["kind"]>([
   // ...client...))` is the suite's canonical self-capturing const.
   "http2Session",
   "http2Stream",
+  // A promise whose own reaction captures it (`const p = op.then(() =>
+  // done(p))`), heap-backed like the handles.
+  "promise",
 ]);
 
 /** The hoisted-handler shape: a function declared BEFORE a const it
@@ -1273,14 +1276,26 @@ const TDZ_KINDS = new Set<IrType["kind"]>([
  * is empty. Mutable bindings also guard writes; only the declaration's
  * initializing assignment may leave the temporal dead zone. */
 export function predeclareForwardCapture(lowerer: Lowerer, symbol: ts.Symbol): boolean {
-  const decl = symbol.valueDeclaration;
+  const valueDecl = symbol.valueDeclaration;
+  // A name a destructuring declaration binds (`const { mounts } = make()`)
+  // predeclares the same way: the pattern's binding of that name is the
+  // initializing assign (bindPatternTarget).
+  const patternName =
+    valueDecl !== undefined &&
+    ts.isBindingElement(valueDecl) &&
+    valueDecl.name !== undefined &&
+    ts.isIdentifier(valueDecl.name)
+      ? valueDecl.name
+      : null;
+  const decl = patternName ? hostVariableDeclarationOf(patternName) : valueDecl;
   if (
     !decl ||
     !ts.isVariableDeclaration(decl) ||
     decl.name === undefined ||
-    !ts.isIdentifier(decl.name)
+    (patternName === null && !ts.isIdentifier(decl.name))
   )
     return false;
+  const nameNode: ts.Identifier = patternName ?? (decl.name as ts.Identifier);
   if (!decl.initializer) return false;
   const flags = ts.getCombinedNodeFlags(decl);
   if ((flags & ts.NodeFlags.BlockScoped) === 0 || (flags & ts.NodeFlags.Using) !== 0) return false;
@@ -1308,8 +1323,9 @@ export function predeclareForwardCapture(lowerer: Lowerer, symbol: ts.Symbol): b
     // TDZ read until the initializing assign completes — JS exactly.
     if (idx < entry.index || entry.ctx === lowerer.ctx || entry.ctx.tdzPredeclared.has(symbol))
       return false;
-    let type = lowerer.irTypeOf(decl.name);
+    let type = lowerer.irTypeOf(nameNode);
     if (
+      patternName === null &&
       isJsSourceFile(ts.getSourceFileOfNode(decl)) &&
       !decl.type &&
       !hasJsTypeAnnotation(decl) &&
@@ -1324,9 +1340,9 @@ export function predeclareForwardCapture(lowerer: Lowerer, symbol: ts.Symbol): b
     // An island handle binding holds a checked-dynamic value whatever its
     // declared type says: its own declaration lowers as one, and so must
     // the slot a closure captured first.
-    if (islandHandleBinding(lowerer, decl.name)) type = DYN;
+    if (islandHandleBinding(lowerer, nameNode)) type = DYN;
     if (!TDZ_KINDS.has(type.kind) || isUnitType(type)) return false;
-    const name = decl.name.text;
+    const name = nameNode.text;
     const count = entry.ctx.localCounters.get(name) ?? 0;
     entry.ctx.localCounters.set(name, count + 1);
     const local: IrLocal = {
@@ -6416,6 +6432,20 @@ export function bindPatternTarget(
         kind: "assign",
         localId: hoisted.id,
         value: lowerer.coerceInto(name, value, hoisted.type),
+        loc,
+      });
+      return;
+    }
+    // A name an earlier nested function captured (predeclareForwardCapture):
+    // its TDZ box exists, and this binding initializes it.
+    const pre = symbol ? lowerer.ctx.tdzPredeclared.get(symbol) : undefined;
+    if (pre) {
+      lowerer.ctx.tdzPredeclared.delete(symbol!);
+      out.push({
+        kind: "assign",
+        localId: pre.id,
+        value: lowerer.coerceInto(name, value, pre.type),
+        initializes: true,
         loc,
       });
       return;
