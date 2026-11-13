@@ -141,7 +141,12 @@ export function lowerUnitComparison(
   const other = unit === left ? right : left;
   if (other.kind === "unitLit") {
     // Two unit literals (`undefined === undefined`): statically decided.
-    return { kind: "boolLit", value: (other.unit === unit.unit) !== negated, type: BOOL, loc };
+    return {
+      kind: "boolLit",
+      value: (other.unit === unit.unit) !== negated,
+      type: BOOL,
+      loc,
+    };
   }
   const slot = lowerer.deferredFieldSlot(other);
   if (slot) return lowerUnitComparison(lowerer, slot, unit, negated, loc);
@@ -178,7 +183,12 @@ export function lowerUnitComparison(
       // operand, so a non-droppable one (`xs.find(f) === null` — the
       // callback's effects are observable) rides one throwaway tag
       // test; droppable reads fold to the bare literal.
-      const answer: IrExpr = { kind: "boolLit", value: negated, type: BOOL, loc };
+      const answer: IrExpr = {
+        kind: "boolLit",
+        value: negated,
+        type: BOOL,
+        loc,
+      };
       if (isSafeToDiscard(other)) return answer;
       const evalOnce: IrExpr = {
         kind: "unionIsTag",
@@ -851,7 +861,11 @@ export function lowerNullishPair(
       // by name where the left side is absent (absentDefaultStop).
       const stop = absentDefaultStop(lowerer, expr, rest[0]!, rightType, loc);
       if (stop !== null) {
-        lowerer.absentDefaultStops.set(expr, { from: stop.from, to: type, loc });
+        lowerer.absentDefaultStops.set(expr, {
+          from: stop.from,
+          to: type,
+          loc,
+        });
         return { kind: "nullish", left, right: stop.value, type, loc };
       }
     }
@@ -923,7 +937,13 @@ export function lowerNullishPair(
             widened,
             loc,
             () => right,
-            (stable) => ({ kind: "call", callee: retag, args: [stable], type: widened, loc }),
+            (stable) => ({
+              kind: "call",
+              callee: retag,
+              args: [stable],
+              type: widened,
+              loc,
+            }),
           );
         }
       }
@@ -950,7 +970,13 @@ export function lowerNullishPair(
       const right = lowerer.coerceInto(expr.right, raw, left.type);
       return { kind: "nullish", left, right, type: left.type, loc };
     }
-    return { kind: "nullish", left, right: lowerer.coerceInto(expr.right, raw, type), type, loc };
+    return {
+      kind: "nullish",
+      left,
+      right: lowerer.coerceInto(expr.right, raw, type),
+      type,
+      loc,
+    };
   }
   if (typeEquals(type, left.type) || (rest.length === 1 && typeEquals(type, rest[0]!))) {
     const right = lowerer.lowerExprExpecting(expr.right, type);
@@ -967,7 +993,13 @@ export function lowerNullishPair(
         type,
         loc,
         () => lowerer.lowerExprExpecting(expr.right, type),
-        (stable) => ({ kind: "call", callee: helper, args: [stable], type, loc }),
+        (stable) => ({
+          kind: "call",
+          callee: helper,
+          args: [stable],
+          type,
+          loc,
+        }),
       );
     }
   }
@@ -993,7 +1025,13 @@ export function lowerNullishPair(
         () => lowerer.lowerExprExpecting(expr.right, type),
         (stable) => ({
           kind: "upcast",
-          value: { kind: "call", callee: helper, args: [stable], type: present, loc },
+          value: {
+            kind: "call",
+            callee: helper,
+            args: [stable],
+            type: present,
+            loc,
+          },
           type,
           loc,
         }),
@@ -1020,7 +1058,13 @@ export function lowerNullishPair(
         type,
         loc,
         () => lowerer.lowerExprExpecting(expr.right, type),
-        (stable) => ({ kind: "call", callee: retag, args: [stable], type, loc }),
+        (stable) => ({
+          kind: "call",
+          callee: retag,
+          args: [stable],
+          type,
+          loc,
+        }),
       );
     }
   }
@@ -1050,7 +1094,13 @@ export function lowerNullishPair(
         (stable) => {
           const value = lowerer.withDeclaredCallList(() =>
             lowerer.coerceToExpected(
-              { kind: "call", callee: helper, args: [stable], type: present, loc },
+              {
+                kind: "call",
+                callee: helper,
+                args: [stable],
+                type: present,
+                loc,
+              },
               type,
             ),
           );
@@ -1216,7 +1266,12 @@ function lowerConstructorGlobalTypeofTest(
     if (!ts.isTypeOfExpression(a) || !ts.isStringLiteral(b)) continue;
     const answer = constructorGlobalTypeof(lowerer, a.expression);
     if (answer !== null)
-      return { kind: "boolLit", value: (answer === b.text) !== negated, type: BOOL, loc };
+      return {
+        kind: "boolLit",
+        value: (answer === b.text) !== negated,
+        type: BOOL,
+        loc,
+      };
   }
   return null;
 }
@@ -1235,17 +1290,35 @@ export function ensureString(
   }
   if (e.type.kind === "string") return e;
   if (e.type.kind === "url")
-    return { kind: "libCall", fn: "url.href", args: [e], type: STRING, loc: e.loc };
+    return {
+      kind: "libCall",
+      fn: "url.href",
+      args: [e],
+      type: STRING,
+      loc: e.loc,
+    };
   // String(sp) / `${new URLSearchParams(...)}`: URLSearchParams.toString,
   // the serialized list (`?` stripped, pairs encoded).
   if (e.type.kind === "searchParams")
-    return { kind: "libCall", fn: "sp.toString", args: [e], type: STRING, loc: e.loc };
+    return {
+      kind: "libCall",
+      fn: "sp.toString",
+      args: [e],
+      type: STRING,
+      loc: e.loc,
+    };
   // String(date) / `${date}` / "" + date: Date's ToPrimitive prefers
   // toString(), which the program may have replaced with an own property
   // this typed path cannot see.
   if (e.type.kind === "date") {
     refuseShadowedImplicitReader(lowerer, node, e.type, "toString", "string conversion");
-    return { kind: "libCall", fn: "date.toString", args: [e], type: STRING, loc: e.loc };
+    return {
+      kind: "libCall",
+      fn: "date.toString",
+      args: [e],
+      type: STRING,
+      loc: e.loc,
+    };
   }
   if (e.type.kind === "regex") {
     refuseShadowedImplicitReader(lowerer, node, e.type, "toString", "string conversion");
@@ -1344,7 +1417,13 @@ export function ensureString(
       if (helper)
         return ensureString(
           lowerer,
-          { kind: "call", callee: helper, args: [e], type: narrowed, loc: e.loc },
+          {
+            kind: "call",
+            callee: helper,
+            args: [e],
+            type: narrowed,
+            loc: e.loc,
+          },
           node,
         );
     }
@@ -1382,7 +1461,11 @@ export function ensureString(
     // Keep sequencing and branch effects even though the final unit's
     // spelling is constant. Never turn an unknown producer into a literal.
     if (e.kind === "seqExpr") {
-      return { ...e, result: lowerer.ensureString(e.result, node), type: STRING };
+      return {
+        ...e,
+        result: lowerer.ensureString(e.result, node),
+        type: STRING,
+      };
     }
     if (e.kind === "ternary") {
       return {
@@ -1421,7 +1504,12 @@ export function ensureString(
     // Checked-dynamic elements: the runtime's String() over the array's
     // dyn form (its join, element by element).
     if (elem.kind === "dyn") {
-      const boxed: IrExpr = { kind: "dynFrom", value: e, type: DYN, loc: e.loc };
+      const boxed: IrExpr = {
+        kind: "dynFrom",
+        value: e,
+        type: DYN,
+        loc: e.loc,
+      };
       return { kind: "toString", operand: boxed, type: STRING, loc: e.loc };
     }
     if (
@@ -1431,7 +1519,12 @@ export function ensureString(
       elem.kind === "date" ||
       joinableUnion
     ) {
-      const sep: IrExpr = { kind: "strLit", value: ",", type: STRING, loc: e.loc };
+      const sep: IrExpr = {
+        kind: "strLit",
+        value: ",",
+        type: STRING,
+        loc: e.loc,
+      };
       return {
         kind: "arrIntrinsic",
         method: "join",
@@ -1568,7 +1661,14 @@ export function lowerCompoundValueToTarget(
   if (numericRead.type.kind === "f64" && numericRhs.type.kind === "f64") {
     return lowerer.coerceInto(
       expr,
-      { kind: "bin", op: compound, left: numericRead, right: numericRhs, type: F64, loc },
+      {
+        kind: "bin",
+        op: compound,
+        left: numericRead,
+        right: numericRhs,
+        type: F64,
+        loc,
+      },
       target.type,
     );
   }
@@ -1639,7 +1739,13 @@ function lowerNanCodedEquality(lowerer: Lowerer, expr: ts.BinaryExpression): IrE
         kind: "logical",
         op: "&&",
         left: { kind: "bin", op: "!==", left: a, right: b, type: BOOL, loc },
-        right: { kind: "unary", op: "!", operand: bothUndefined, type: BOOL, loc },
+        right: {
+          kind: "unary",
+          op: "!",
+          operand: bothUndefined,
+          type: BOOL,
+          loc,
+        },
         type: BOOL,
         loc,
       }
@@ -1689,7 +1795,13 @@ function lowerJsDynArithmetic(
   const args = [lowerer.coerceToExpected(left, DYN), lowerer.coerceToExpected(right, DYN)];
   const bigint = left.type.kind === "bigint" || right.type.kind === "bigint";
   if (text === "+") {
-    const add: IrExpr = { kind: "libCall", fn: "dyn.add", args, type: DYN, loc };
+    const add: IrExpr = {
+      kind: "libCall",
+      fn: "dyn.add",
+      args,
+      type: DYN,
+      loc,
+    };
     return left.type.kind === "string" || right.type.kind === "string"
       ? { kind: "dynCheck", value: add, type: STRING, loc }
       : add;
@@ -1843,7 +1955,13 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       const runtimeOptionalRoot = lowerer.runtimeOptionalRootOf(target);
       if (lowerer.runtimeOptionalStorageLocals.has(runtimeOptionalRoot))
         lowerer.runtimeOptionalLocals.add(runtimeOptionalRoot);
-      return { kind: "assignExpr", localId: target.id, value, type: target.type, loc };
+      return {
+        kind: "assignExpr",
+        localId: target.id,
+        value,
+        type: target.type,
+        loc,
+      };
     }
     const indexedCompound = COMPOUND_ASSIGN_OPS[op];
     if (indexedCompound !== undefined && ts.isElementAccessExpression(expr.left)) {
@@ -1857,7 +1975,13 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         lowerer.rejectUnresolved(expr.left, "assignment to an unresolved variable");
       }
       const value = lowerCompoundValueToTarget(lowerer, expr, indexedCompound, target);
-      return { kind: "assignExpr", localId: target.id, value, type: target.type, loc };
+      return {
+        kind: "assignExpr",
+        localId: target.id,
+        value,
+        type: target.type,
+        loc,
+      };
     }
     if (
       indexedCompound !== undefined &&
@@ -1870,7 +1994,13 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         : null;
       if (target) {
         const value = lowerCompoundValueToTarget(lowerer, expr, indexedCompound, target);
-        return { kind: "assignExpr", localId: target.id, value, type: target.type, loc };
+        return {
+          kind: "assignExpr",
+          localId: target.id,
+          value,
+          type: target.type,
+          loc,
+        };
       }
       return lowerFieldCompoundValue(lowerer, expr.left, indexedCompound, expr.right, loc);
     }
@@ -1912,7 +2042,12 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
                   fn: "emitter.setDefaultMaxChk",
                   args: [
                     dynVal,
-                    { kind: "strLit", value: "defaultMaxListeners", type: STRING, loc },
+                    {
+                      kind: "strLit",
+                      value: "defaultMaxListeners",
+                      type: STRING,
+                      loc,
+                    },
                   ],
                   type: VOID,
                   loc,
@@ -1943,7 +2078,13 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       if (target) {
         const value = lowerer.lowerExprExpecting(expr.right, target.type);
         refuseCopiedStore(lowerer, expr.left, target.type, expr.right);
-        return { kind: "assignExpr", localId: target.id, value, type: target.type, loc };
+        return {
+          kind: "assignExpr",
+          localId: target.id,
+          value,
+          type: target.type,
+          loc,
+        };
       }
       // Bundled numeric enums use e[e["name"] = value] = "name".
       // Capture the receiver and key before the RHS. PutValue coerces the
@@ -2124,10 +2265,15 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
     // receiver, the key and the value are evaluated in that order into
     // temporaries first. A receiver held in a temporary must be a
     // checked-dynamic value, which the temporary shares; any other receiver
-    // must be a variable or `this`.
+    // must be a variable or `this`. A TypeScript source takes the same form
+    // when the receiver is a variable or `this` and the value is a number,
+    // string, boolean or bigint (`fields.forEach((k, i) => (out[k] = i))`):
+    // a primitive has no identity, so the value the expression yields and
+    // the value the member holds cannot be told apart.
+    const jsSource = isJsSourceFile(ts.getSourceFileOfNode(expr));
     if (
       op === ts.SyntaxKind.EqualsToken &&
-      isJsSourceFile(ts.getSourceFileOfNode(expr)) &&
+      (jsSource || primitiveAssignedValue(lowerer, expr.right)) &&
       (ts.isPropertyAccessExpression(expr.left) || ts.isElementAccessExpression(expr.left)) &&
       !expr.left.questionDotToken
     ) {
@@ -2135,13 +2281,21 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       const receiverNode = target.expression;
       const bareReceiver =
         ts.isIdentifier(receiverNode) || receiverNode.kind === ts.SyntaxKind.ThisKeyword;
-      if (bareReceiver || tryLowerExpression(lowerer, receiverNode)?.type.kind === "dyn") {
+      if (
+        bareReceiver ||
+        (jsSource && tryLowerExpression(lowerer, receiverNode)?.type.kind === "dyn")
+      ) {
         const stmts: IrStmt[] = [];
         const overrides: { node: ts.Expression; value: IrExpr }[] = [];
         const hold = (node: ts.Expression, name: string): IrExpr => {
           const value = lowerer.lowerExpr(node);
           const local = lowerer.declareHiddenLocal(name, value.type);
-          stmts.push({ kind: "varDecl", localId: local.id, init: value, loc: value.loc });
+          stmts.push({
+            kind: "varDecl",
+            localId: local.id,
+            init: value,
+            loc: value.loc,
+          });
           const held = varRef(local.id, value.type, value.loc);
           overrides.push({ node, value: held });
           return held;
@@ -2583,7 +2737,13 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         const l = lowerer.coerceToExpected(left, DYN);
         const r = lowerer.coerceToExpected(right, DYN);
         if (l.type.kind === "dyn" && r.type.kind === "dyn") {
-          const value: IrExpr = { kind: "libCall", fn: "dyn.add", args: [l, r], type: DYN, loc };
+          const value: IrExpr = {
+            kind: "libCall",
+            fn: "dyn.add",
+            args: [l, r],
+            type: DYN,
+            loc,
+          };
           // A statically known string operand guarantees a string result.
           return other.type.kind === "string"
             ? { kind: "dynCheck", value, type: STRING, loc }
@@ -2676,7 +2836,14 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
             : op === ts.SyntaxKind.GreaterThanToken
               ? ">"
               : ">=";
-      return { kind: "bin", op: cmpOp, left: cmp, right: zero, type: BOOL, loc };
+      return {
+        kind: "bin",
+        op: cmpOp,
+        left: cmp,
+        right: zero,
+        type: BOOL,
+        loc,
+      };
     }
   }
   if (
@@ -2699,7 +2866,12 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         loc,
       };
       const cmpLocal = lowerer.declareHiddenLocal("%bigcmp", F64);
-      const cmpRef: IrExpr = { kind: "varRef", localId: cmpLocal.id, type: F64, loc };
+      const cmpRef: IrExpr = {
+        kind: "varRef",
+        localId: cmpLocal.id,
+        type: F64,
+        loc,
+      };
       const unordered: IrExpr = {
         kind: "bin",
         op: "===",
@@ -2729,7 +2901,14 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         kind: "logical",
         op: "&&",
         left: { kind: "unary", op: "!", operand: unordered, type: BOOL, loc },
-        right: { kind: "bin", op: cmpOp, left: cmpRef, right: zero, type: BOOL, loc },
+        right: {
+          kind: "bin",
+          op: cmpOp,
+          left: cmpRef,
+          right: zero,
+          type: BOOL,
+          loc,
+        },
         type: BOOL,
         loc,
       };
@@ -2802,7 +2981,10 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
       type: F64,
       loc,
     };
-    const resultT: IrType = { kind: "union", unionId: lowerer.unions.intern([F64, STRING]) };
+    const resultT: IrType = {
+      kind: "union",
+      unionId: lowerer.unions.intern([F64, STRING]),
+    };
     lowerer.runtimeOptionalArithmeticTypes.set(expr, resultT);
     const numberTag = lowerer.armTag(resultT.unionId, F64);
     const stringTag = lowerer.armTag(resultT.unionId, STRING);
@@ -3040,8 +3222,23 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
         const unionId = e.type.unionId;
         return {
           kind: "ternary",
-          cond: { kind: "unionIsTag", unionId, tag, negated: false, value: e, type: BOOL, loc },
-          then: oneOrZero({ kind: "unionNarrow", unionId, tag, value: e, type: BOOL, loc }),
+          cond: {
+            kind: "unionIsTag",
+            unionId,
+            tag,
+            negated: false,
+            value: e,
+            type: BOOL,
+            loc,
+          },
+          then: oneOrZero({
+            kind: "unionNarrow",
+            unionId,
+            tag,
+            value: e,
+            type: BOOL,
+            loc,
+          }),
           else_: numLit(0, loc),
           type: F64,
           loc,
@@ -3121,7 +3318,14 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
           loc,
         });
         if (isSafeToRepeat(right))
-          return { kind: "bin", op: cmpOp, left: time(left), right: time(right), type: BOOL, loc };
+          return {
+            kind: "bin",
+            op: cmpOp,
+            left: time(left),
+            right: time(right),
+            type: BOOL,
+            loc,
+          };
         const leftDate = lowerer.declareHiddenLocal("%date", left.type);
         const rightDate = lowerer.declareHiddenLocal("%date", right.type);
         return {
@@ -3213,7 +3417,14 @@ export function lowerStrictEquality(
   const indexed = tryLowerIndexedComparison(lowerer, left, right, negated, loc);
   if (indexed) return indexed;
   if (plainBothNum)
-    return { kind: "bin", op: negated ? "!==" : "===", left, right, type: BOOL, loc };
+    return {
+      kind: "bin",
+      op: negated ? "!==" : "===",
+      left,
+      right,
+      type: BOOL,
+      loc,
+    };
   if (bothStr) {
     if (left.kind === "strLit" && right.kind === "strLit")
       return {
@@ -3227,7 +3438,14 @@ export function lowerStrictEquality(
   // bool === bool: a plain value compare (the config-drift checks'
   // `desired.lanMode !== actual.lanMode` shape).
   if (left.type.kind === "bool" && right.type.kind === "bool") {
-    return { kind: "bin", op: negated ? "!==" : "===", left, right, type: BOOL, loc };
+    return {
+      kind: "bin",
+      op: negated ? "!==" : "===",
+      left,
+      right,
+      type: BOOL,
+      loc,
+    };
   }
   const unitTest = lowerer.lowerUnitComparison(left, right, negated, loc);
   if (unitTest) return unitTest;
@@ -3797,7 +4015,13 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
             kind: "ternary",
             cond: lowerer.ensureBool(stable, expr.left),
             then: lowerer.coerceInto(expr.right, right, target),
-            else_: { kind: "call", callee: retag, args: [stable], type: target, loc },
+            else_: {
+              kind: "call",
+              callee: retag,
+              args: [stable],
+              type: target,
+              loc,
+            },
             type: target,
             loc,
           };
@@ -3885,7 +4109,13 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
             cond: lowerer.ensureBool(stable, expr.left),
             then: lowerer.withDeclaredCallList(() =>
               lowerer.coerceToExpected(
-                { kind: "call", callee: helper, args: [stable], type: taken, loc },
+                {
+                  kind: "call",
+                  callee: helper,
+                  args: [stable],
+                  type: taken,
+                  loc,
+                },
                 target,
               ),
             ),
@@ -3910,8 +4140,18 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
       ) {
         lowerer.requireTruthyUnion(left.type.unionId, expr);
         if (orStop !== null && target !== null && typeEquals(target, rest[0]!)) {
-          lowerer.absentDefaultStops.set(expr, { from: orStop.from, to: rest[0]!, loc });
-          return { kind: "orDefault", left, right: orStop.value, type: rest[0]!, loc };
+          lowerer.absentDefaultStops.set(expr, {
+            from: orStop.from,
+            to: rest[0]!,
+            loc,
+          });
+          return {
+            kind: "orDefault",
+            left,
+            right: orStop.value,
+            type: rest[0]!,
+            loc,
+          };
         }
         const dflt = lowerer.lowerExprExpecting(expr.right, rest[0]!);
         return { kind: "orDefault", left, right: dflt, type: rest[0]!, loc };
@@ -3961,7 +4201,13 @@ function lowerLogicalPair(lowerer: Lowerer, expr: ts.BinaryExpression, left: IrE
           const result: IrExpr = {
             kind: "ternary",
             cond: lowerer.ensureBool(stable, expr.left),
-            then: { kind: "call", callee: helper, args: [stable], type: target, loc },
+            then: {
+              kind: "call",
+              callee: helper,
+              args: [stable],
+              type: target,
+              loc,
+            },
             else_: lowerer.lowerExprExpecting(expr.right, target),
             type: target,
             loc,
@@ -4138,11 +4384,24 @@ function lowerAbsenceAwareOrChain(lowerer: Lowerer, expr: ts.BinaryExpression): 
       const nonUnit = def?.arms.filter((arm) => !isUnitType(arm)) ?? [];
       if (nonUnit.length !== 1 || !typeEquals(nonUnit[0]!, result.type)) return null;
       lowerer.requireTruthyUnion(left.type.unionId, expr);
-      result = { kind: "orDefault", left, right: result, type: result.type, loc };
+      result = {
+        kind: "orDefault",
+        left,
+        right: result,
+        type: result.type,
+        loc,
+      };
       continue;
     }
     if (!typeEquals(left.type, result.type)) return null;
-    result = { kind: "logical", op: "||", left, right: result, type: result.type, loc };
+    result = {
+      kind: "logical",
+      op: "||",
+      left,
+      right: result,
+      type: result.type,
+      loc,
+    };
   }
   return result;
 }
@@ -4160,7 +4419,12 @@ function lowerWebAssemblyTypeofTest(
     if (!ts.isTypeOfExpression(a) || !ts.isStringLiteral(b)) continue;
     const folded = lowerWebAssemblyTypeof(lowerer, a.expression);
     if (folded?.kind !== "strLit") continue;
-    return { kind: "boolLit", value: (folded.value === b.text) !== negated, type: BOOL, loc };
+    return {
+      kind: "boolLit",
+      value: (folded.value === b.text) !== negated,
+      type: BOOL,
+      loc,
+    };
   }
   return null;
 }
@@ -4205,7 +4469,12 @@ function lowerUnionTypeofTest(
           "statically-decided 'typeof' tests over effectful operands (bind the value to a const first)",
         );
       }
-      return { kind: "boolLit", value: (tags.length !== 0) !== negated, type: BOOL, loc };
+      return {
+        kind: "boolLit",
+        value: (tags.length !== 0) !== negated,
+        type: BOOL,
+        loc,
+      };
     }
     const isTag = (tag: number): IrExpr => ({
       kind: "unionIsTag",
@@ -4239,4 +4508,18 @@ function lowerUnionTypeofTest(
     return acc;
   }
   return null;
+}
+
+/** Whether the checker types an assigned value as a number, string,
+ * boolean or bigint (literal types included). */
+function primitiveAssignedValue(lowerer: Lowerer, node: ts.Expression): boolean {
+  const mapped = lowerer.mapTypeOf(lowerer.typeOf(node));
+  return (
+    mapped !== null &&
+    mapped !== undefined &&
+    (mapped.kind === "f64" ||
+      mapped.kind === "string" ||
+      mapped.kind === "bool" ||
+      mapped.kind === "bigint")
+  );
 }
