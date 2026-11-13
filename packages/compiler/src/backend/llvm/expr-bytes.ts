@@ -1,10 +1,24 @@
 /* Focused LLVM expression emission extracted from emitter.ts. */
 import { InternalCompilerError } from "../../errors.js";
-import { emitBorrowedInput } from "./borrowed-inputs.js";
+import { emitBorrowedInput, emitBorrowedInputs } from "./borrowed-inputs.js";
+import { finishRuntimeCall, ptr } from "./lib-abi.js";
 import type { BytesHeader } from "./bytes-headers.js";
-import { BYTES_ELEMENT_SIZE, F64, type IrBytesElem, type IrExpr } from "../../ir/ir.js";
+import {
+  BYTES_ELEMENT_SIZE,
+  F64,
+  type IrBytesElem,
+  type IrExpr,
+  isBigIntBytesElem,
+} from "../../ir/ir.js";
 import type { LlvmEmitterContext, LlValue, OffsetIndex } from "./expr-context.js";
-import { F64_INF, exactIndexLines, exactOffsetIndexLines, f64Lit, sizeToDouble } from "./common.js";
+import {
+  BYTES_ELEM_NUM,
+  F64_INF,
+  exactIndexLines,
+  exactOffsetIndexLines,
+  f64Lit,
+  sizeToDouble,
+} from "./common.js";
 import { alwaysExactInteger, exactInteger } from "./integer-values.js";
 import { byteNumberAccess } from "../../ir/byte-numbers.js";
 import { emitByteNumber } from "./byte-numbers.js";
@@ -1370,4 +1384,103 @@ export function emitInlineAtomicsOp(
   const out = B.tmp();
   B.line(`${out} = phi double [ ${fast}, %${fastDone} ], [ ${called}, %${slowDone} ]`);
   return { name: out, type: F64 };
+}
+
+/** The BigInt64Array and BigUint64Array calls: the views over a buffer or
+ * of a length (scr_array_buffer_view of the element kind), element reads
+ * and writes, and the Atomics operations, each a 64-bit load, store or
+ * atomic instruction on the element. Bigints cross as their low 64 bits
+ * (scr_bigint_to_u64) and come back by the array's signedness. Returns
+ * null for every other call. */
+export function emitBigIntBytesLibCall(
+  host: LlvmEmitterContext,
+  e: IrExpr & { kind: "libCall" },
+): LlValue | null {
+  const B = host.B;
+  if (e.fn === "arrayBuffer.viewI64" || e.fn === "arrayBuffer.viewU64") {
+    const elem = e.fn === "arrayBuffer.viewI64" ? "i64" : "u64";
+    const args = emitBorrowedInputs(host, e.args);
+    return finishRuntimeCall(host, e, "scr_array_buffer_view", [
+      { type: "i32", name: String(BYTES_ELEM_NUM[elem]) },
+      ...args.map((arg) => ptr(arg.name)),
+    ]);
+  }
+  if (e.fn !== "bytes.bigGet" && e.fn !== "bytes.bigSet" && e.fn !== "atomics.bigOp") return null;
+  const array = e.args[0]!;
+  if (array.type.kind !== "bytes" || !isBigIntBytesElem(array.type.elem))
+    throw new InternalCompilerError(`${e.fn} on a non-BigInt typed array`);
+  const signed = array.type.elem === "i64";
+  const values = emitBorrowedInputs(host, e.args);
+  const receiver = values[0]!.name;
+  const index = values[1]!;
+  const bits = (value: LlValue): string => {
+    host.declare(`declare i64 @scr_bigint_to_u64(ptr)`);
+    const t = B.tmp();
+    B.line(`${t} = call i64 @scr_bigint_to_u64(ptr ${value.name})`);
+    return t;
+  };
+  const toBigInt = (raw: string): LlValue => {
+    const ctor = signed ? "scr_bigint_from_i64" : "scr_bigint_from_u64";
+    host.declare(`declare ptr @${ctor}(i64)`);
+    const t = B.tmp();
+    B.line(`${t} = call ptr @${ctor}(i64 ${raw})`);
+    return host.own({ name: t, type: e.type });
+  };
+  // Worker programs may share the storage: their plain accesses are relaxed
+  // atomics, aligned as every BigInt view is.
+  const shared = host.mod.workers;
+  if (e.fn === "bytes.bigSet") {
+    const raw = bits(values[2]!);
+    // An index that is not an integer in [0, length) skips the write.
+    const done = B.newLabel("bytes.big.store.done");
+    const data = host.emitBytesData(receiver);
+    const idx = emitBytesIndex(host, receiver, index, e.args[1], done);
+    const p = B.tmp();
+    B.line(`${p} = getelementptr inbounds i64, ptr ${data}, ${host.sizeType} ${idx}`);
+    B.line(
+      shared
+        ? `store atomic i64 ${raw}, ptr ${p} monotonic, align 8`
+        : `store i64 ${raw}, ptr ${p}, align 1${bytesElementAlias(host)}`,
+    );
+    B.br(done);
+    B.startBlock(done);
+    return { name: "", type: e.type };
+  }
+  // The caller checked the index: the invalid branch never runs.
+  const data = host.emitBytesData(receiver);
+  const idx = emitBytesIndex(host, receiver, index, e.args[1]);
+  const p = B.tmp();
+  B.line(`${p} = getelementptr inbounds i64, ptr ${data}, ${host.sizeType} ${idx}`);
+  const old = B.tmp();
+  if (e.fn === "bytes.bigGet") {
+    B.line(
+      shared
+        ? `${old} = load atomic i64, ptr ${p} monotonic, align 8`
+        : `${old} = load i64, ptr ${p}, align 1${bytesElementAlias(host)}`,
+    );
+    return toBigInt(old);
+  }
+  const operation = e.args[4];
+  if (operation?.kind !== "numLit")
+    throw new InternalCompilerError("atomics.bigOp needs a literal operation");
+  const op = operation.value;
+  if (op === 0) B.line(`${old} = load atomic i64, ptr ${p} seq_cst, align 8`);
+  else if (op === 1) {
+    const raw = bits(values[2]!);
+    B.line(`store atomic i64 ${raw}, ptr ${p} seq_cst, align 8`);
+    return toBigInt(raw);
+  } else if (op === 3) {
+    const expected = bits(values[2]!);
+    const replacement = bits(values[3]!);
+    const pair = B.tmp();
+    B.line(
+      `${pair} = cmpxchg ptr ${p}, i64 ${expected}, i64 ${replacement} seq_cst seq_cst, align 8`,
+    );
+    B.line(`${old} = extractvalue { i64, i1 } ${pair}, 0`);
+  } else {
+    const rmw = ATOMIC_RMW[op];
+    if (rmw === undefined) throw new InternalCompilerError(`unknown Atomics operation ${op}`);
+    B.line(`${old} = atomicrmw ${rmw} ptr ${p}, i64 ${bits(values[2]!)} seq_cst, align 8`);
+  }
+  return toBigInt(old);
 }

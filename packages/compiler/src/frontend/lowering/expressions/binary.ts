@@ -1,4 +1,5 @@
 /* Binary operators: arithmetic, comparisons and equality, logical and nullish pairs, and string conversion for concatenation. */
+import { refuseBigIntBytes } from "../containers/bytes.js";
 import {
   fenceConsoleMutation,
   isConsoleExpression,
@@ -1963,6 +1964,7 @@ export function lowerBinary(lowerer: Lowerer, expr: ts.BinaryExpression): IrExpr
           );
         }
         if (recv?.type.kind === "array" || recv?.type.kind === "bytes") {
+          refuseBigIntBytes(lowerer, recv.type, expr.left, "element assignment as a value");
           const receiver = lowerer.declareHiddenLocal("%setArray", recv.type);
           // An undefined index names the "undefined" property
           // (undefined-index.ts), which a typed array cannot hold.

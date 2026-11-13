@@ -1,4 +1,5 @@
 import { lowerStaticPrivateAssignment } from "./private-statics.js";
+import { refuseBigIntBytes } from "./containers/bytes.js";
 import type { DiagnosticCode } from "../../diagnostics/codes.js";
 import {
   keepsInitializerLayout,
@@ -3605,6 +3606,7 @@ export function lowerBindingPattern(
     // fresh number[] (never another typed array), exactly the iterator
     // protocol's Array accumulation.
     if (srcType.kind === "bytes") {
+      refuseBigIntBytes(lowerer, srcType, pattern, "destructuring");
       pattern.elements.nodes.forEach((el, i) => {
         if (ts.isOmittedExpression(el) || el.name === undefined) return;
         const loc = locOf(el);
@@ -12990,6 +12992,7 @@ function lowerArrayAssignInto(
       };
     }
     if (srcType.kind === "bytes") {
+      refuseBigIntBytes(lowerer, srcType, at, "destructuring");
       return {
         kind: "bytesIntrinsic",
         method: "get",
@@ -13632,6 +13635,7 @@ export function lowerForOf(lowerer: Lowerer, stmt: ts.ForOfStatement): IrStmt {
     }
   }
   if (iterable.type.kind === "bytes" || indexedUnionArms(lowerer, iterable.type)) {
+    refuseBigIntBytes(lowerer, iterable.type, stmt.expression, "for-of");
     return lowerForOfBytes(lowerer, stmt, iterable, labels);
   }
   if (iterable.type.kind !== "array") {

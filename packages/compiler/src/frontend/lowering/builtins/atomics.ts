@@ -1,8 +1,21 @@
 import * as ts from "../../ts7/adapter.js";
 import { type Lowerer } from "../lowerer.js";
 import { locOf } from "../../program.js";
-import { BOOL, DYN, F64, type IrExpr, STRING, type SrcLoc } from "../../../ir/ir.js";
+import {
+  BIGINT_T,
+  BOOL,
+  DYN,
+  F64,
+  type IrExpr,
+  type IrType,
+  STRING,
+  type SrcLoc,
+  isBigIntBytesElem,
+  typeKey,
+} from "../../../ir/ir.js";
+import { helperLoc, nodeThrowExpr, numLit, varRef } from "../../../ir/build.js";
 import { lowerOptionalArgument } from "../optional-arguments.js";
+import { keyedHelperName } from "../stable-names.js";
 
 const OPERATIONS = [
   "load",
@@ -63,6 +76,11 @@ export function lowerAtomicsCall(
   // An untyped array (a JavaScript `workerData` or field): the runtime
   // checks its kind and throws Node's TypeError for any other value.
   const dynamic = type?.kind === "dyn";
+  if (type?.kind === "bytes" && isBigIntBytesElem(type.elem)) {
+    if (member === "wait" || member === "notify")
+      lowerer.noLowering(`Atomics.${member} over this array`, source, "use an Int32Array");
+    return lowerBigIntAtomicsCall(lowerer, call, array, member, operation);
+  }
   if (
     !dynamic &&
     (type?.kind !== "bytes" ||
@@ -74,7 +92,7 @@ export function lowerAtomicsCall(
       source,
       member === "wait" || member === "notify"
         ? "use an Int32Array"
-        : "use an 8-, 16-, or 32-bit integer typed array",
+        : "use an 8-, 16-, or 32-bit integer typed array, a BigInt64Array or a BigUint64Array",
     );
   }
   const number = (value: number): IrExpr => ({ kind: "numLit", value, type: F64, loc });
@@ -106,6 +124,142 @@ export function lowerAtomicsCall(
     type: F64,
     loc,
   };
+}
+
+/** An Atomics operation on a BigInt64Array or BigUint64Array: the
+ * arguments evaluate in order, then a helper per element kind and operation
+ * converts the index (NaN is 0, fractions truncate), throws Node's
+ * RangeError for an index outside [0, length), and runs the 64-bit atomic
+ * instruction. store answers its value argument, as in JavaScript; the
+ * other operations answer the element's previous value. */
+function lowerBigIntAtomicsCall(
+  lowerer: Lowerer,
+  call: ts.CallExpression,
+  array: IrExpr,
+  member: string,
+  operation: number,
+): IrExpr {
+  const loc = locOf(call);
+  const zero: IrExpr = {
+    kind: "libCall",
+    fn: "bigint.parse",
+    args: [{ kind: "strLit", value: "0", type: STRING, loc }],
+    type: BIGINT_T,
+    loc,
+  };
+  const nodes = call.arguments.nodes;
+  const index = lowerOptionalArgument(lowerer, nodes[1]!, F64, numLit(0, loc));
+  const value = nodes[2] ? lowerer.lowerExprExpecting(nodes[2], BIGINT_T) : zero;
+  const replacement = nodes[3] ? lowerer.lowerExprExpecting(nodes[3], BIGINT_T) : zero;
+  const name = bigIntAtomicsHelper(lowerer, array.type, member, operation, loc);
+  return {
+    kind: "call",
+    callee: name,
+    args: [array, index, value, replacement],
+    type: BIGINT_T,
+    loc,
+  };
+}
+
+function bigIntAtomicsHelper(
+  lowerer: Lowerer,
+  arrayT: IrType,
+  member: string,
+  operation: number,
+  loc: SrcLoc,
+): string {
+  const key = `atomicsBig:${member}:${typeKey(arrayT)}`;
+  const known = lowerer.arrHofHelpers.get(key);
+  if (known) return known;
+  const name = keyedHelperName(lowerer, `%atomics.big.${member}`, key);
+  lowerer.arrHofHelpers.set(key, name);
+  const at = helperLoc(loc);
+  const a = varRef("a.0", arrayT, at);
+  const i = varRef("i.0", F64, at);
+  const v = varRef("v.0", BIGINT_T, at);
+  const w = varRef("w.0", BIGINT_T, at);
+  const j = varRef("j.0", F64, at);
+  const op: IrExpr = {
+    kind: "libCall",
+    fn: "atomics.bigOp",
+    args: [a, j, v, w, numLit(operation, at)],
+    type: BIGINT_T,
+    loc: at,
+  };
+  const inRange: IrExpr = {
+    kind: "logical",
+    op: "&&",
+    left: { kind: "bin", op: ">=", left: j, right: numLit(0, at), type: BOOL, loc: at },
+    right: {
+      kind: "bin",
+      op: "<",
+      left: j,
+      right: {
+        kind: "bytesIntrinsic",
+        method: "length",
+        receiver: a,
+        args: [],
+        type: F64,
+        loc: at,
+      },
+      type: BOOL,
+      loc: at,
+    },
+    type: BOOL,
+    loc: at,
+  };
+  lowerer.liftedFns.push({
+    name,
+    params: [
+      { localId: "a.0", name: "a", type: arrayT },
+      { localId: "i.0", name: "i", type: F64 },
+      { localId: "v.0", name: "v", type: BIGINT_T },
+      { localId: "w.0", name: "w", type: BIGINT_T },
+    ],
+    returnType: BIGINT_T,
+    locals: [
+      { id: "a.0", name: "a", type: arrayT, mutable: false },
+      { id: "i.0", name: "i", type: F64, mutable: false },
+      { id: "v.0", name: "v", type: BIGINT_T, mutable: false },
+      { id: "w.0", name: "w", type: BIGINT_T, mutable: false },
+      { id: "j.0", name: "j", type: F64, mutable: false },
+    ],
+    body: [
+      {
+        kind: "varDecl",
+        localId: "j.0",
+        init: {
+          kind: "ternary",
+          cond: { kind: "libCall", fn: "num.isNaN", args: [i], type: BOOL, loc: at },
+          then: numLit(0, at),
+          else_: { kind: "libCall", fn: "math.trunc", args: [i], type: F64, loc: at },
+          type: F64,
+          loc: at,
+        },
+        loc: at,
+      },
+      {
+        kind: "if",
+        cond: inRange,
+        then:
+          member === "store"
+            ? [
+                { kind: "exprStmt", expr: op, loc: at },
+                { kind: "return", value: v, loc: at },
+              ]
+            : [{ kind: "return", value: op, loc: at }],
+        else_: [],
+        loc: at,
+      },
+      {
+        kind: "return",
+        value: nodeThrowExpr(2, "", "Invalid atomic access index", BIGINT_T, at),
+        loc: at,
+      },
+    ],
+    loc: at,
+  });
+  return name;
 }
 
 /** The Atomics members with untyped forms, as function values: each

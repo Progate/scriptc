@@ -1,4 +1,5 @@
 /* Increment, decrement and prefix unary operators, and compound field updates. */
+import { refuseBigIntBytes } from "../containers/bytes.js";
 import { staticPrivateUpdateTarget } from "../private-statics.js";
 import { lowerCompoundValueToTarget, numericTypeStaysNumber } from "./binary.js";
 import {
@@ -434,6 +435,7 @@ export function lowerIncDec(
       ts.isElementAccessExpression(access) &&
       (raw.type.kind === "array" || raw.type.kind === "bytes")
     ) {
+      refuseBigIntBytes(lowerer, raw.type, access, "increment and decrement of an element");
       const receiver = save(raw, "%incrementArray");
       // An undefined index names the "undefined" property
       // (undefined-index.ts), which a typed array cannot hold.

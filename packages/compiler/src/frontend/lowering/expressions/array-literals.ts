@@ -1,4 +1,5 @@
 /* Array literals. */
+import { refuseBigIntBytes } from "../containers/bytes.js";
 import { indexedUnionArms, lowerIndexedUnionToArray } from "../indexed-unions.js";
 import * as ts from "../../ts7/adapter.js";
 import { type Lowerer, neverTaintedJsType } from "../lowerer.js";
@@ -662,6 +663,7 @@ export function lowerArrayLiteral(
       // the Uint8Array-to-Array bridge (`[...u8]`), with element values
       // read rather than backing bytes for the wider typed-array kinds.
       if (src.type.kind === "bytes") {
+        refuseBigIntBytes(lowerer, src.type, el, "spread");
         src = {
           kind: "bytesIntrinsic",
           method: "toArray",

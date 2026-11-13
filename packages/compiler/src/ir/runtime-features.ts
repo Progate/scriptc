@@ -2165,13 +2165,16 @@ const RUNTIME_FEATURE_RULES = {
   /** process.emitWarning is assigned (process.setEmitWarning). */
   warningReplace: rule({ fns: ["process.setEmitWarning"] }),
   /** A BigInt typed-array constructor read as a value (BigInt64Array,
-   * BigUint64Array): their element kinds, which no double represents, live
+   * BigUint64Array), or a typed construction of one: their element kinds, which no double represents, live
    * in the JavaScript object model build (t262-da §J) of scr_bytes.c,
    * scr_json.c, scr_dyn_invoke.c and the assert, inspect and console units.
    * The fact ORs into jsObjectModel (jsObjectModelFact), so it selects no
    * build column of its own. Every other program keeps the byte-for-byte
    * default objects. */
   bigintBytes: rule({
+    // The typed forms: every BigInt64Array or BigUint64Array value a typed
+    // program holds is constructed by one of the view calls.
+    fns: ["arrayBuffer.viewI64", "arrayBuffer.viewU64"],
     libCall: (node) =>
       node.fn === "bytes.constructor" &&
       node.args[0]?.kind === "strLit" &&

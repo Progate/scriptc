@@ -29,7 +29,7 @@ import { everyStmtList } from "../../ir/traverse.js";
 import { DYN_KIND } from "./dyn.js";
 import { CLASS_KEY_LEN_MIX, CLASS_VALUE_SLOT_MIX } from "../../ir/class-key-index.js";
 import { caBytes, callRuntime, ptr } from "./lib-abi.js";
-import { emitInlineAtomicsOp } from "./expr-bytes.js";
+import { emitBigIntBytesLibCall, emitInlineAtomicsOp } from "./expr-bytes.js";
 import { regexLiteralCaptures } from "./regex-matchers.js";
 import { registerReplay } from "./emit-journal.js";
 import { RECORD_SOURCES_GATE } from "./alloc.js";
@@ -1406,6 +1406,8 @@ export function emitLibCall(host: LlvmEmitterContext, e: LibCallExpr): LlValue {
     const inline = emitInlineAtomicsOp(host, e);
     if (inline) return inline;
   }
+  const bigIntBytes = emitBigIntBytesLibCall(host, e);
+  if (bigIntBytes) return bigIntBytes;
   if (e.fn === "bytes.isAbsent") {
     // A borrowed read: retaining an absent Buffer would dereference NULL.
     const value = host.emitReadReceiver(e.args[0]!);

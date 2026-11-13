@@ -4942,6 +4942,11 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
   if (isStdlibInterface("Float16Array")) return bytesOf("f16");
   if (isStdlibInterface("Float32Array")) return bytesOf("f32");
   if (isStdlibInterface("Float64Array")) return bytesOf("f64");
+  // The BigInt kinds hold bigint elements: element reads and writes,
+  // Atomics, construction and the buffer accessors lower; every other
+  // typed-array member keeps its refusal.
+  if (isStdlibInterface("BigInt64Array")) return bytesOf("i64");
+  if (isStdlibInterface("BigUint64Array")) return bytesOf("u64");
   // DataView: the ONE view kind — a u8 bytes value whose runtime
   // representation borrows (aliases) its owner's storage, so reads through
   // it see writes to the source exactly like JS. The checker keeps the
@@ -11781,7 +11786,12 @@ function mapBoundRecordIntersection(type: ts.Type, ctx: TypeMapperCtx): IrType |
     const mapped = isParam ? resolveTypeParam(part) : mapType(part, ctx);
     if (!mapped || mapped.kind !== "record") return null;
     const shape = ctx.shapes.get(mapped.shapeId);
-    if (!shape || shape.tuple || shape.indexValue !== undefined || shape.accessorOrder !== undefined)
+    if (
+      !shape ||
+      shape.tuple ||
+      shape.indexValue !== undefined ||
+      shape.accessorOrder !== undefined
+    )
       return null;
     for (const field of shape.fields) {
       const previous = fields.get(field.name);

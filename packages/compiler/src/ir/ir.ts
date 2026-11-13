@@ -26,8 +26,10 @@ export interface SrcLoc {
 
 /* ── types ─────────────────────────────────────────────────────────────── */
 
-/** Numeric typed-array element kinds with a native representation. BigInt
- * typed arrays remain frontend-fenced. */
+/** Typed-array element kinds with a native representation. The 64-bit
+ * BigInt kinds (i64, u64) hold bigint elements: their element reads,
+ * writes and Atomics take bigint libCalls, and every other typed-array
+ * operation on them stays frontend-fenced (isBigIntBytesElem). */
 export type IrBytesElem =
   | "u8"
   | "u8c"
@@ -38,7 +40,9 @@ export type IrBytesElem =
   | "i32"
   | "f16"
   | "f32"
-  | "f64";
+  | "f64"
+  | "i64"
+  | "u64";
 
 export const BYTES_ELEMENT_SIZE: Record<IrBytesElem, number> = {
   u8: 1,
@@ -51,11 +55,19 @@ export const BYTES_ELEMENT_SIZE: Record<IrBytesElem, number> = {
   f16: 2,
   f32: 4,
   f64: 8,
+  i64: 8,
+  u64: 8,
 };
 
 /** Integer element kinds: a valid element read is never NaN. */
 export function isIntegerBytesElem(elem: IrBytesElem): boolean {
   return elem !== "f16" && elem !== "f32" && elem !== "f64";
+}
+
+/** The BigInt64Array and BigUint64Array element kinds, whose elements are
+ * bigints rather than numbers. */
+export function isBigIntBytesElem(elem: IrBytesElem): elem is "i64" | "u64" {
+  return elem === "i64" || elem === "u64";
 }
 
 /** Typed-array constructors whose element kind is a BigInt. The typed IR has
@@ -75,6 +87,8 @@ export const BYTES_ELEMENT_NAME: Record<IrBytesElem, string> = {
   f16: "Float16Array",
   f32: "Float32Array",
   f64: "Float64Array",
+  i64: "BigInt64Array",
+  u64: "BigUint64Array",
 };
 
 export type IrType =

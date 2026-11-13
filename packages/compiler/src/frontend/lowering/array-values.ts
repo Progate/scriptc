@@ -2,6 +2,7 @@ import { keyedHelperName } from "./stable-names.js";
 import { InternalCompilerError } from "../../errors.js";
 import { dynUndefinedExpr, helperLoc, numLit, varRef } from "../../ir/build.js";
 import {
+  BIGINT_T,
   BOOL,
   DYN,
   F64,
@@ -1336,6 +1337,94 @@ export function lowerSafeBytesRead(
     });
   }
   return { kind: "call", callee: name, args: [receiver, index], type: resultT, loc };
+}
+
+/** `b[i]` on a BigInt64Array or BigUint64Array: the element as a bigint
+ * when `i` is an integer in [0, length), and undefined otherwise, as in
+ * Node. One lifted helper per element kind tests the index and reads. */
+export function lowerSafeBigBytesRead(
+  lowerer: Lowerer,
+  receiver: IrExpr,
+  index: IrExpr,
+  loc: SrcLoc,
+): IrExpr {
+  const bytesT = receiver.type;
+  if (bytesT.kind !== "bytes") throw new InternalCompilerError("typed read requires bytes");
+  const resultT = lowerer.withUndefinedArm(BIGINT_T);
+  const key = `bytesBigIdxOr:${typeKey(bytesT)}`;
+  let name = lowerer.arrHofHelpers.get(key);
+  if (!name) {
+    const at = helperLoc(loc);
+    name = keyedHelperName(lowerer, "%bytes.bigIdxOr", key);
+    lowerer.arrHofHelpers.set(key, name);
+    const b = varRef("b.0", bytesT, at);
+    const i = varRef("i.0", F64, at);
+    lowerer.liftedFns.push({
+      name,
+      params: [
+        { localId: "b.0", name: "b", type: bytesT },
+        { localId: "i.0", name: "i", type: F64 },
+      ],
+      returnType: resultT,
+      locals: [
+        { id: "b.0", name: "b", type: bytesT, mutable: false },
+        { id: "i.0", name: "i", type: F64, mutable: false },
+      ],
+      body: [
+        {
+          kind: "return",
+          value: {
+            kind: "ternary",
+            cond: validBytesIndex(b, i, at),
+            then: lowerer.coerceToExpected(
+              { kind: "libCall", fn: "bytes.bigGet", args: [b, i], type: BIGINT_T, loc: at },
+              resultT,
+            ),
+            else_: lowerer.wrappedUndefined(resultT, at)!,
+            type: resultT,
+            loc: at,
+          },
+          loc: at,
+        },
+      ],
+      loc: at,
+    });
+  }
+  return { kind: "call", callee: name, args: [receiver, index], type: resultT, loc };
+}
+
+/** Whether `i` is an integer index in [0, b.length). */
+export function validBytesIndex(b: IrExpr, i: IrExpr, at: SrcLoc): IrExpr {
+  const cmp = (op: "<" | ">=" | "===", left: IrExpr, right: IrExpr): IrExpr => ({
+    kind: "bin",
+    op,
+    left,
+    right,
+    type: BOOL,
+    loc: at,
+  });
+  return {
+    kind: "logical",
+    op: "&&",
+    left: cmp(">=", i, numLit(0, at)),
+    right: {
+      kind: "logical",
+      op: "&&",
+      left: cmp("<", i, {
+        kind: "bytesIntrinsic",
+        method: "length",
+        receiver: b,
+        args: [],
+        type: F64,
+        loc: at,
+      }),
+      right: cmp("===", { kind: "libCall", fn: "math.trunc", args: [i], type: F64, loc: at }, i),
+      type: BOOL,
+      loc: at,
+    },
+    type: BOOL,
+    loc: at,
+  };
 }
 
 /** Whether `operand` is a call of the typed-array read helper. */
