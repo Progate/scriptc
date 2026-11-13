@@ -2562,13 +2562,15 @@ export class ClassProtocols {
       (!symbol ||
         !symbol.declarations.some(
           (declaration) =>
-            ts.isInterfaceDeclaration(declaration) &&
+            (ts.isInterfaceDeclaration(declaration) || assertedTypeLiteral(declaration)) &&
             !ts.getSourceFileOfNode(declaration).isDeclarationFile,
         ))
     )
       return false;
     for (const property of properties) {
-      const memberType = this.checker.getTypeOfSymbol(property);
+      // An optional method (`watch?(...)`, `watch?: (...) => ...`) is a
+      // method a class may declare too.
+      const memberType = this.checker.getNonNullableType(this.checker.getTypeOfSymbol(property));
       if (this.checker.getCallSignatures(memberType).length === 0) continue;
       for (const declaration of this.methods.get(ts.symbolName(property)) ?? []) {
         const classSymbol = declaration.name
@@ -2583,6 +2585,19 @@ export class ClassProtocols {
     }
     return false;
   }
+}
+
+/** A type literal written as the type of an assertion (`fs as { watch?:
+ * (listener: Listener) => () => void }`): the program looks at a value it
+ * holds through a structural view to find a method, which a class instance
+ * answers from its prototype and calls with the instance as `this`. Like an
+ * interface a class implements, the view is a protocol when a program class
+ * declares one of its methods (see protocol). */
+function assertedTypeLiteral(declaration: ts.Node): boolean {
+  if (!ts.isTypeLiteralNode(declaration)) return false;
+  let outer: ts.Node | undefined = declaration.parent;
+  while (outer !== undefined && ts.isParenthesizedTypeNode(outer)) outer = outer.parent;
+  return outer !== undefined && (ts.isAsExpression(outer) || ts.isTypeAssertion(outer));
 }
 
 /** How deep markReceivedView follows composites and members. The set of
