@@ -18165,6 +18165,20 @@ export class Lowerer {
               this.isSubclassOf(from.className, to.className)),
         ),
       );
+    // A dynamic value narrowed to a user class (`value instanceof C`) holds
+    // the instance itself: the checked unbox hands back the same reference.
+    // Error classes cross the dynamic boundary as snapshots, so they stay out.
+    const unboxesClassInstance =
+      value.type.kind === "dyn" &&
+      target.length > 0 &&
+      target.every(
+        (to) =>
+          to.kind === "object" &&
+          this.classes.has(to.className) &&
+          !RUNTIME_ERROR_CLASSES.has(to.className) &&
+          !this.isSubclassOf(to.className, "%Error"),
+      );
+    if (unboxesClassInstance) return this.coerceInto(node, value, expected);
     if (!preservesIdentity || value.kind === "dynCheck") {
       this.noLowering(
         `collection key conversion from '${this.fmt(value.type)}' to '${this.fmt(expected)}' requiring a structural copy or dynamic conversion`,
