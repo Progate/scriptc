@@ -80,6 +80,8 @@ import { hasGlobalFunctionValue } from "../global-function-values.js";
 import { builtinGlobalHasKey } from "../builtins/global-namespace-keys.js";
 import { foldedStringKeyOf } from "./object-literals.js";
 import { NARROW_FIRST, sideEffectFreeOptionValue, stdlibGlobalNameOf } from "../surfaces.js";
+import { builtinNamespaceOwns } from "../builtin-namespaces.js";
+import { OBJECT_PROTOTYPE_MEMBERS } from "../../shape-inference/domain.js";
 import { isExecExceptionType, refuseExecExceptionCode } from "../builtins/errors.js";
 import { hasRuntimeStatics } from "../class-runtime-statics.js";
 import { nullProtoRecordShape, recordNullProtoTest } from "../null-prototype.js";
@@ -2292,6 +2294,23 @@ export function lowerInExpression(
   if (isConsoleExpression(lowerer, expr.right)) {
     const has = consoleHasKey(lowerer, expr.left, loc);
     if (has) return has;
+  }
+  // `"waitAsync" in Atomics`: a feature probe of a standard namespace
+  // object, whose properties are Node's (builtin-namespaces.ts) plus the
+  // ones it inherits from Object.prototype. A TypeScript source never holds
+  // the namespace object as a value, so nothing adds or removes its
+  // properties; a JavaScript source can, and tests the object it built.
+  if (!isJsSourceFile(ts.getSourceFileOfNode(expr))) {
+    const key = lowerer.foldedStringKeyOf(expr.left);
+    const namespace = key === null ? null : stdlibGlobalNameOf(lowerer, expr.right);
+    const owns = key !== null && namespace !== null ? builtinNamespaceOwns(namespace, key) : null;
+    if (owns !== null)
+      return {
+        kind: "boolLit",
+        value: owns || OBJECT_PROTOTYPE_MEMBERS.has(key!),
+        type: BOOL,
+        loc,
+      };
   }
   // `#name in obj` — the ergonomic brand check (ES2022) — resolves
   // before any string-key machinery: the left operand is a private

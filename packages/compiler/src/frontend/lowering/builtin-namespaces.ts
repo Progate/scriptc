@@ -156,6 +156,14 @@ const CONFIGURABLE = 4;
  * program's builtin lookup (global-values.ts) holds every namespace without
  * the program naming it, and its members still throw their fences when
  * called. */
+/** Whether Node's `canonical` namespace object (`Math`, `JSON`, `Reflect`,
+ * `Atomics`, ...) has the own string-keyed property `key`, or null for a
+ * name that is not such a namespace. */
+export function builtinNamespaceOwns(canonical: string, key: string): boolean | null {
+  const members = namespaceMembers(canonical);
+  return members === null ? null : members.some((member) => member.key === key);
+}
+
 export function builtinNamespaceValue(
   lowerer: Lowerer,
   canonical: string,

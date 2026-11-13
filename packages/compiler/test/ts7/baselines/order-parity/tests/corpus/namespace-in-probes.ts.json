@@ -1,0 +1,6 @@
+{
+ "order": [
+  "<repo>/tests/corpus/namespace-in-probes.ts"
+ ],
+ "diags": []
+}
