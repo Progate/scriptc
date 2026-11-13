@@ -20,6 +20,7 @@ import { newFnCtx } from "../function-context.js";
 import type { Lowerer } from "../lowerer.js";
 import { omittedArgFor } from "../call-arguments.js";
 import { maybePromiseUnionOf } from "../maybe-promise.js";
+import { arrayValueType, lowerSafeIndexRead } from "../array-values.js";
 
 /** Wrap a zero-argument function whose array result needs an element
  * conversion. Each invocation creates a fresh converted array; the factory
@@ -145,6 +146,7 @@ export function cleanFuncAdaptable(
   dst: IrType & { kind: "func" },
 ): boolean {
   if (restPackingAdapterFits(lowerer, src, dst)) return true;
+  if (fixedIntoRestAdapterFits(lowerer, src, dst)) return true;
   if (variadicBoundaryFits(lowerer, src, dst)) return true;
   if (src.rest === true || dst.rest === true) return false;
   // In checked mode (a method field's adapter, WidthLift funcAdaptChecked)
@@ -217,6 +219,7 @@ export function funcSlotAdaptable(
   loc: SrcLoc,
 ): boolean {
   if (restPackingAdapterFits(lowerer, src, dst)) return true;
+  if (fixedIntoRestAdapterFits(lowerer, src, dst)) return true;
   if (variadicBoundaryFits(lowerer, src, dst)) return true;
   if (src.rest === true || dst.rest === true) return false;
   for (let i = dst.params.length; i < src.params.length; i++) {
@@ -493,6 +496,135 @@ function restPackingAdapter(
   return name;
 }
 
+/** Whether a function can serve a slot whose signature ends in a typed rest
+ * parameter (`(a: bigint, b: bigint) => R` into `(...args: bigint[]) =>
+ * R`, a dispatch table of handlers called with an argument array): the
+ * slot's fixed parameters convert to the function's first parameters, and
+ * the rest array's element reads (which yield undefined past the end, as a
+ * JavaScript call that passes fewer arguments does) convert to the
+ * remaining ones. A function with its own typed rest parameter (`(a, b,
+ * ...rest) => …` written for that slot) takes the rest array's remainder
+ * there, when it names at least the slot's fixed parameters and the
+ * element types agree. */
+export function fixedIntoRestAdapterFits(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "func" },
+  toT: IrType & { kind: "func" },
+): boolean {
+  if (toT.rest !== true || toT.restAbi !== "typed" || typeEquals(fromT, toT)) return false;
+  if (fromT.rest === true && fromT.restAbi !== "typed") return false;
+  if (fromT.argumentsAll === true || toT.argumentsAll === true) return false;
+  const fixed = toT.params.length - 1;
+  const restT = toT.params[fixed];
+  if (restT?.kind !== "array" || restT.elem.kind === "void") return false;
+  const fromFixed = fromT.rest === true ? fromT.params.length - 1 : fromT.params.length;
+  if (fromT.rest === true) {
+    const fromRest = fromT.params[fromFixed];
+    if (fromFixed < fixed || fromRest === undefined || !typeEquals(fromRest, restT)) return false;
+  }
+  const read = arrayValueType(lowerer, restT.elem);
+  for (let i = 0; i < fromFixed; i++) {
+    const from = i < fixed ? toT.params[i]! : read;
+    if (!lowerer.coercibleValue(from, fromT.params[i]!)) return false;
+  }
+  return toT.ret.kind === "void" || lowerer.coercibleValue(fromT.ret, toT.ret);
+}
+
+/** The adapter for fixedIntoRestAdapterFits. It forwards the slot's fixed
+ * arguments and reads each remaining parameter from the rest array by
+ * position, so the function sees what a JavaScript call with that argument
+ * list gives it: surplus arguments are dropped (or, for a function with its
+ * own rest parameter, collected there by a slice of the rest array), and a
+ * missing one reads as undefined. A parameter that can hold undefined (`x?: T`, a defaulted
+ * one, or one the indexed-read analysis widened) receives it; any other
+ * parameter takes the checked narrowing of the element read, which throws
+ * a TypeError where Node.js would bind undefined to a parameter whose type
+ * excludes it. */
+function fixedIntoRestAdapter(
+  lowerer: Lowerer,
+  fromT: IrType & { kind: "func" },
+  toT: IrType & { kind: "func" },
+  loc: SrcLoc,
+): string | null {
+  const key = `fnfixedrest:${typeKey(fromT)}:${typeKey(toT)}`;
+  const existing = lowerer.coercions.retags.get(key);
+  if (existing) return existing;
+  const fixed = toT.params.length - 1;
+  const restT = toT.params[fixed] as IrType & { kind: "array" };
+  const params: IrParam[] = toT.params.map((type, i) => ({
+    localId: `a.${i}`,
+    name: `a${i}`,
+    type,
+  }));
+  const context = newFnCtx(false, null, null, toT.ret);
+  let body: IrStmt[];
+  lowerer.fnStack.push(context);
+  try {
+    const args: IrExpr[] = [];
+    const fromFixed = fromT.rest === true ? fromT.params.length - 1 : fromT.params.length;
+    for (let i = 0; i < fromFixed; i++) {
+      const want = fromT.params[i]!;
+      const source: IrExpr | null =
+        i < fixed
+          ? { kind: "varRef", localId: `a.${i}`, type: toT.params[i]!, loc }
+          : lowerSafeIndexRead(
+              lowerer,
+              { kind: "varRef", localId: `a.${fixed}`, type: restT, loc },
+              { kind: "numLit", value: i - fixed, type: F64, loc },
+              loc,
+            );
+      if (source === null) return null;
+      const converted = lowerer.coerceToExpected(source, want);
+      if (!typeEquals(converted.type, want))
+        throw new InternalCompilerError(
+          "lowerer bug: probed rest adapter argument stopped coercing",
+        );
+      args.push(converted);
+    }
+    if (fromT.rest === true) {
+      const restRef: IrExpr = { kind: "varRef", localId: `a.${fixed}`, type: restT, loc };
+      // The function's own rest array is a fresh array, as in a JavaScript
+      // call: a slice even when it starts at 0, so writes to it stay its own.
+      args.push({
+        kind: "arrIntrinsic",
+        method: "slice",
+        receiver: restRef,
+        args: [{ kind: "numLit", value: fromFixed - fixed, type: F64, loc }],
+        type: restT,
+        loc,
+      });
+    }
+    const call: IrExpr = {
+      kind: "callValue",
+      callee: { kind: "varRef", localId: "f.0", type: fromT, loc },
+      receiver: { kind: "libCall", fn: "dyn.this", args: [], type: DYN, loc },
+      args,
+      type: fromT.ret,
+      loc,
+    };
+    if (toT.ret.kind === "void") {
+      body = [
+        { kind: "exprStmt", expr: call, loc },
+        { kind: "return", value: null, loc },
+      ];
+    } else {
+      const result = lowerer.coerceToExpected(call, toT.ret);
+      if (!typeEquals(result.type, toT.ret))
+        throw new InternalCompilerError("lowerer bug: probed rest adapter result stopped coercing");
+      body = [{ kind: "return", value: result, loc }];
+    }
+  } finally {
+    lowerer.fnStack.pop();
+  }
+  const name = keyedHelperName(lowerer, "%fn.adapt", key);
+  lowerer.coercions.retags.set(key, name);
+  lowerer.freshClosureAdapters.add(name);
+  lowerer.liftedFns.push(
+    ...buildFunctionAdapter(name, fromT, toT, params, context.locals, body, loc),
+  );
+  return name;
+}
+
 /** Adapt a fixed-parameter function to a checked-dynamic rest signature
  * without fixed parameters (`() => {}` into mock.fn()'s `(...args: any[])
  * => undefined`): the adapter receives the hidden argument array and
@@ -625,6 +757,8 @@ export function funcCoerceAdapter(
 ): string | null {
   if (restPackingAdapterFits(lowerer, fromT, toT))
     return restPackingAdapter(lowerer, fromT, toT, loc);
+  if (fixedIntoRestAdapterFits(lowerer, fromT, toT))
+    return fixedIntoRestAdapter(lowerer, fromT, toT, loc);
   if (variadicBoundaryFits(lowerer, fromT, toT))
     return variadicBoundaryAdapter(lowerer, fromT, toT, loc);
   if (toT.rest === true && toT.restAbi === undefined && toT.params.length === 0)

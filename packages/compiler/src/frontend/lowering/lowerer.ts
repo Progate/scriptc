@@ -11669,7 +11669,17 @@ export class Lowerer {
                 if (aliasNew) provenance?.note("function-alias", node.name, node.initializer);
                 if (aliasNew) changed = true;
                 const valueType = this.mapTypeOf(this.typeOf(node.name));
-                if (valueType?.kind === "func" && sourceSig) {
+                // The binding takes the source's completed signature only
+                // where its own type has the same parameter list shape. A
+                // binding typed with a rest parameter (`const h: (...args:
+                // bigint[]) => R = g`) holds g adapted to that signature,
+                // and g's parameters are not its ABI.
+                if (
+                  valueType?.kind === "func" &&
+                  sourceSig &&
+                  valueType.rest !== true &&
+                  valueType.params.length === sourceSig.params.length
+                ) {
                   const promotedFn: IrType = {
                     ...valueType,
                     params: sourceSig.params.map((p) => p.type),
