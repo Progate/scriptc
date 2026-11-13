@@ -1090,6 +1090,18 @@ export function lowerArrayMethodCall(
           loc,
         };
       }
+      // `numbers.push(...bytes)`: a typed array iterates its elements as
+      // numbers, which its array copy holds in the same order.
+      if (src.type.kind === "bytes" && typeEquals(elem, F64)) {
+        src = {
+          kind: "bytesIntrinsic",
+          method: "toArray",
+          receiver: src,
+          args: [],
+          type: arrayOf(F64),
+          loc,
+        };
+      }
       if (
         src.type.kind === "array" &&
         !typeEquals(src.type, receiverIr) &&
