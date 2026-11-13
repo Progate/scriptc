@@ -7,7 +7,15 @@ import { completeFuncValueArgs } from "../call-arguments.js";
 import { overloadValueResult } from "../lower-calls.js";
 import { dynUndefinedExpr } from "../../../ir/build.js";
 import * as ts from "../../ts7/adapter.js";
-import { DYN, STRING, UNDEFINED_T, VOID, isUnitType, typeEquals } from "../../../ir/ir.js";
+import {
+  DYN,
+  STRING,
+  UNDEFINED_T,
+  VOID,
+  isUnitType,
+  typeEquals,
+  type IrType,
+} from "../../../ir/ir.js";
 import type { IrExpr, IrStmt, SrcLoc } from "../../../ir/ir.js";
 import { isNodeEsmFile, locOf } from "../../program.js";
 import type { Lowerer } from "../lowerer.js";
@@ -536,7 +544,7 @@ export function lowerOptionalChain(
       loc,
     };
   }
-  const narrowed =
+  let narrowed: IrType =
     rest.length === 1
       ? rest[0]!
       : { kind: "union" as const, unionId: lowerer.unions.transform(def, rest) };
@@ -551,7 +559,27 @@ export function lowerOptionalChain(
     loc: locOf(recvNode),
   };
   if (narrowed.kind === "union" && receiver.type.kind === "union") {
-    recvRef = lowerer.coerceInto(recvNode, recvRef, narrowed);
+    // The checker can prove more than the nullish test: a union already
+    // narrowed by an earlier guard (`if (d !== "s") d?.length` over
+    // `Uint8Array | null | "s"`) is one present arm inside the chain, and
+    // the member dispatch types the receiver by it. Extract that arm with
+    // the checked helper a narrowed read uses.
+    const proven = lowerer.mapTypeOf(
+      lowerer.checker.getNonNullableType(chainReceiverType(lowerer, recvNode)),
+    );
+    const helper =
+      proven &&
+      proven.kind !== "union" &&
+      !isUnitType(proven) &&
+      rest.some((a) => typeEquals(a, proven))
+        ? lowerer.narrowedArmHelper(receiver.type.unionId, proven, loc)
+        : null;
+    if (helper) {
+      recvRef = { kind: "call", callee: helper, args: [recvRef], type: proven!, loc: recvRef.loc };
+      narrowed = proven!;
+    } else {
+      recvRef = lowerer.coerceInto(recvNode, recvRef, narrowed);
+    }
   }
 
   // `f?.()`: the callee IS the guarded value — build the indirect call
