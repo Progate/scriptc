@@ -1,3 +1,4 @@
+import { lowerBytesAtCall } from "./relative-index.js";
 import { keyedHelperName } from "../stable-names.js";
 import { allBytesArms, indexedUnionArms, lowerIndexedUnionMethod } from "../indexed-unions.js";
 import { boolLit, dynUndefinedExpr, nodeThrowExpr, numLit, varRef } from "../../../ir/build.js";
@@ -1259,6 +1260,7 @@ export function lowerBytesMethodCall(
   if (name === "sort" || name === "toSorted") {
     return lowerBytesSortCall(lowerer, call, access, receiverIr);
   }
+  if (name === "at" && nArgs <= 1) return lowerBytesAtCall(lowerer, call, access, receiverIr);
   if (BYTES_CALLBACK_METHODS.has(name)) {
     return lowerBytesCallbackCall(lowerer, call, access, name as BytesCallbackMethod, receiverIr);
   }
