@@ -22,6 +22,7 @@ import {
   typeEquals,
 } from "../../../ir/ir.js";
 import type { IrExpr, IrLocal, IrRecordShape, IrStmt, IrType, SrcLoc } from "../../../ir/ir.js";
+import { contextualUndefReadType, nsUndefRead } from "../lower-namespaces.js";
 import { isCjsExportTableLiteral, isJsSourceFile, locOf } from "../../program.js";
 import { NARROW_FIRST } from "../surfaces.js";
 import {
@@ -4764,6 +4765,12 @@ export function lowerShorthandValue(
     // An enum (`{ Level }`): its object, as the long form reads it.
     const enumObject = lowerEnumObjectValue(lowerer, propName, resolved);
     if (enumObject) return enumObject;
+    // A TRAP binding (its initializer provably threw, so this property is
+    // never built): the read the long form `{ name: name }` lowers to.
+    if (lowerer.trapBindings.has(resolved)) {
+      const t = contextualUndefReadType(lowerer, propName) ?? F64;
+      return nsUndefRead(lowerer, propName.text, propName, t);
+    }
   }
   lowerer.rejectUnresolvedSymbol(
     symbol
