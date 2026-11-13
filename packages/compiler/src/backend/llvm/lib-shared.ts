@@ -159,6 +159,7 @@ export const LIB_FN_SYMS: Record<string, string> = {
   "num.parseInt": "scr_parse_int",
   "num.parseFloat": "scr_parse_float",
   "str.localeCompare": "scr_str_locale_compare",
+  "str.localeCompareWith": "scr_str_locale_compare_with",
   "str.substr": "scr_str_substr",
   "str.localeCase": "scr_str_locale_case",
   "str.replaceLiteral": "scr_str_replace_literal",

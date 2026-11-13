@@ -1096,6 +1096,7 @@ function buildLibFnSignatures() {
     /** `a.localeCompare(b)`: -1/0/1 in Node's root-locale collation for
      * Latin-script text (scr_str_locale_compare). Never throws. */
     "str.localeCompare": { argTypes: [STRING, STRING], result: F64 },
+    "str.localeCompareWith": { argTypes: [STRING, STRING, F64], result: F64 },
     /** Annex B substr(start, length) with start ToNumber'd and length's
      * presence; never throws. */
     "str.substr": { argTypes: [STRING, F64, F64, BOOL], result: STRING },

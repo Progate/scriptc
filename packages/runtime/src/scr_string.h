@@ -344,6 +344,7 @@ int scr_str_cmp(ScrStr *a, ScrStr *b);
 /* a.localeCompare(b) with no locales/options: Node's root-locale order for
  * Latin-script text, code-point order outside it (scr_string.c). */
 double scr_str_locale_compare(ScrStr *a, ScrStr *b);
+double scr_str_locale_compare_with(ScrStr *a, ScrStr *b, double flags);
 
 /* ECMAScript string ordering: compare UTF-16 code units even though ScrStr
  * stores WTF-8. Returns <0, 0, >0. */

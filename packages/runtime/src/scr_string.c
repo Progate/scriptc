@@ -4314,7 +4314,14 @@ static inline bool scr_coll_starts_contraction(uint32_t c) {
 
 /* Elements of a UTF-8 string, marks in canonical order; false when a code
  * point is outside the table. */
+static bool scr_coll_elements_marking(const ScrStr *s, ScrCollBuf *b, uint8_t *digits);
 static bool scr_coll_elements(const ScrStr *s, ScrCollBuf *b) {
+  return scr_coll_elements_marking(s, b, NULL);
+}
+
+/* scr_coll_elements, and when `digits` is not NULL (room for 3 * s->len
+ * flags) whether each element is an ASCII digit's. */
+static bool scr_coll_elements_marking(const ScrStr *s, ScrCollBuf *b, uint8_t *digits) {
   /* At most three elements per code point and one code point per byte:
    * reserve once, so the loop below needs no capacity checks. */
   if (s->len > SIZE_MAX / 3 / sizeof(ScrCollElem)) scr_oom();
@@ -4333,6 +4340,7 @@ static bool scr_coll_elements(const ScrStr *s, ScrCollBuf *b) {
     uint32_t c = *p;
     if (c < 0x80 && scr_coll_ascii_plain[c]) {
       p++;
+      if (digits) digits[n] = c >= '0' && c <= '9';
       e[n++] = (ScrCollElem){ascii[c].p, ascii[c].s, ascii[c].t, 0};
       continue;
     }
@@ -4351,10 +4359,12 @@ static bool scr_coll_elements(const ScrStr *s, ScrCollBuf *b) {
       if (x.ccc != 0) {
         while (j > 0 && e[j - 1].ccc > x.ccc) {
           e[j] = e[j - 1];
+          if (digits) digits[j] = digits[j - 1];
           j--;
         }
       }
       e[j] = x;
+      if (digits) digits[j] = 0;
     }
   }
   b->n = n;
@@ -4652,6 +4662,112 @@ static __attribute__((noinline)) double scr_coll_compare_lists(const ScrCollAsci
   }
   if (ea.e != ea.inline_buf) free(ea.e);
   if (eb.e != eb.inline_buf) free(eb.e);
+  return (double)r;
+}
+
+/* ── localeCompare(that, locales, options) ─────────────────────────────
+ * The root collation (above) with the two options that change it without
+ * tailoring: `numeric` and `sensitivity`. `flags` holds SCR_COLL_NUMERIC
+ * and the levels compared: SCR_COLL_ACCENTS (secondary) and SCR_COLL_CASE
+ * (tertiary); the primary level is always compared. "base" is neither,
+ * "accent" adds accents, "variant" (the default) both. ("case" is ICU's
+ * case level, not the tertiary one; the compiler does not lower it.)
+ *
+ * Numeric collation reads each run of ASCII digits as one number: leading
+ * zeros drop from the run at every level, as ICU's numeric mode does
+ * ("01" equals "1"), and at the primary level a longer run is the greater
+ * number, equal lengths comparing digit by digit. */
+#define SCR_COLL_NUMERIC 1
+#define SCR_COLL_ACCENTS 2
+#define SCR_COLL_CASE 4
+
+/* Drops the leading zeros of every digit run (keeping a run's last digit). */
+static void scr_coll_strip_zeros(ScrCollBuf *b, uint8_t *digits, unsigned zero) {
+  size_t out = 0;
+  bool leading = false;
+  for (size_t i = 0; i < b->n; i++) {
+    if (!digits[i]) leading = false;
+    else if (i == 0 || !digits[i - 1]) leading = true;
+    if (leading && b->e[i].p == zero && i + 1 < b->n && digits[i + 1]) continue;
+    if (digits[i]) leading = false;
+    b->e[out] = b->e[i];
+    digits[out] = digits[i];
+    out++;
+  }
+  b->n = out;
+}
+
+/* The length of the digit run starting at element i. */
+static size_t scr_coll_run(const ScrCollBuf *b, const uint8_t *digits, size_t i) {
+  size_t k = i;
+  while (k < b->n && digits[k]) k++;
+  return k - i;
+}
+
+static int scr_coll_numeric_primary(const ScrCollBuf *a, const uint8_t *da, const ScrCollBuf *b,
+                                    const uint8_t *db) {
+  size_t i = 0, j = 0;
+  for (;;) {
+    while (i < a->n && a->e[i].p == 0) i++;
+    while (j < b->n && b->e[j].p == 0) j++;
+    if (i == a->n || j == b->n) return (i == a->n) == (j == b->n) ? 0 : i == a->n ? -1 : 1;
+    if (da[i] && db[j]) {
+      size_t ra = scr_coll_run(a, da, i), rb = scr_coll_run(b, db, j);
+      if (ra != rb) return ra < rb ? -1 : 1;
+      for (size_t k = 0; k < ra; k++) {
+        unsigned wa = a->e[i + k].p, wb = b->e[j + k].p;
+        if (wa != wb) return wa < wb ? -1 : 1;
+      }
+      i += ra;
+      j += rb;
+      continue;
+    }
+    unsigned wa = a->e[i].p, wb = b->e[j].p;
+    if (wa != wb) return wa < wb ? -1 : 1;
+    i++;
+    j++;
+  }
+}
+
+double scr_str_locale_compare_with(ScrStr *a, ScrStr *b, double flags_value) {
+  int flags = (int)flags_value;
+  if (flags == (SCR_COLL_ACCENTS | SCR_COLL_CASE)) return scr_str_locale_compare(a, b);
+  if (a == b) return 0;
+  const ScrCollAscii *table = scr_coll_ascii();
+  ScrCollBuf ea, eb;
+  ea.n = eb.n = 0;
+  ea.e = ea.inline_buf;
+  ea.cap = sizeof ea.inline_buf / sizeof ea.inline_buf[0];
+  eb.e = eb.inline_buf;
+  eb.cap = sizeof eb.inline_buf / sizeof eb.inline_buf[0];
+  bool numeric = (flags & SCR_COLL_NUMERIC) != 0;
+  uint8_t *da = NULL, *db = NULL;
+  if (numeric) {
+    da = malloc(3 * a->len + 1);
+    db = malloc(3 * b->len + 1);
+    if (!da || !db) scr_oom();
+  }
+  int r = 0;
+  if (scr_coll_elements_marking(a, &ea, da) && scr_coll_elements_marking(b, &eb, db)) {
+    if (numeric) {
+      unsigned zero = table['0'].p;
+      scr_coll_strip_zeros(&ea, da, zero);
+      scr_coll_strip_zeros(&eb, db, zero);
+      r = scr_coll_numeric_primary(&ea, da, &eb, db);
+    } else {
+      r = scr_coll_level(&ea, &eb, 0);
+    }
+    if (r == 0 && (flags & SCR_COLL_ACCENTS)) r = scr_coll_level(&ea, &eb, 1);
+    if (r == 0 && (flags & SCR_COLL_CASE)) r = scr_coll_level(&ea, &eb, 2);
+  } else {
+    /* Outside the table: code-point order, the one-argument form's limit. */
+    int c = scr_str_cmp(a, b);
+    r = c < 0 ? -1 : c > 0 ? 1 : 0;
+  }
+  if (ea.e != ea.inline_buf) free(ea.e);
+  if (eb.e != eb.inline_buf) free(eb.e);
+  free(da);
+  free(db);
   return (double)r;
 }
 

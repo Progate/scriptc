@@ -1,3 +1,4 @@
+import { withoutParentheses } from "../../outer-expressions.js";
 import { keyedHelperName } from "../stable-names.js";
 import { matchAllRowsReadByElements } from "./match-row-uses.js";
 import {
@@ -1538,19 +1539,83 @@ function lowerLocaleCompareCall(
   if (receiverIr?.kind !== "string") return null;
   if (!lowerer.isStdlibMember(access)) return null;
   const loc = locOf(call);
-  if (call.arguments.nodes.length !== 1) {
+  const nodes = call.arguments.nodes;
+  const flags = nodes.length >= 1 && nodes.length <= 3 ? localeCompareFlags(lowerer, nodes) : null;
+  if (flags === null) {
     lowerer.noLowering(
-      `.localeCompare with ${call.arguments.nodes.length} arguments`,
+      `.localeCompare with ${nodes.length} arguments`,
       call,
-      "the locales/options parameters select ICU collations that have no lowering — " +
-        "pass exactly the comparison string",
+      'the root collation lowers: no locale or an English one ("en", "en-US"), and ' +
+        'options written as an object literal with literal `numeric` and `sensitivity` ("base", "accent" or "variant") values; ' +
+        "other locales and options select ICU tailorings that have no lowering",
     );
   }
   const receiver = lowerMethodReceiver(lowerer, access.expression, STRING, access.name.text);
-  const arg = lowerer.lowerExpr(call.arguments.nodes[0]!);
-  if (arg.type.kind !== "string")
-    lowerer.badType(call.arguments.nodes[0]!, lowerer.typeOf(call.arguments.nodes[0]!));
-  return { kind: "libCall", fn: "str.localeCompare", args: [receiver, arg], type: F64, loc };
+  const arg = lowerer.lowerExpr(nodes[0]!);
+  if (arg.type.kind !== "string") lowerer.badType(nodes[0]!, lowerer.typeOf(nodes[0]!));
+  if (flags === LOCALE_COMPARE_DEFAULT)
+    return { kind: "libCall", fn: "str.localeCompare", args: [receiver, arg], type: F64, loc };
+  return {
+    kind: "libCall",
+    fn: "str.localeCompareWith",
+    args: [receiver, arg, { kind: "numLit", value: flags, type: F64, loc }],
+    type: F64,
+    loc,
+  };
+}
+
+/** scr_str_locale_compare_with's flags (scr_string.c): numeric collation,
+ * and the secondary (accent) and tertiary (case) levels compared after the
+ * primary one. The default sensitivity, "variant", compares both. */
+const LOCALE_COMPARE_NUMERIC = 1;
+const LOCALE_COMPARE_ACCENTS = 2;
+const LOCALE_COMPARE_CASE = 4;
+const LOCALE_COMPARE_DEFAULT = LOCALE_COMPARE_ACCENTS | LOCALE_COMPARE_CASE;
+/** "case" is ICU's case level, which reads the case of each letter rather
+ * than the tertiary weight, and stays unlowered. */
+const LOCALE_COMPARE_SENSITIVITY: Record<string, number> = {
+  base: 0,
+  accent: LOCALE_COMPARE_ACCENTS,
+  variant: LOCALE_COMPARE_DEFAULT,
+};
+
+/** The flags of `a.localeCompare(b, locales, options)`, or null when the
+ * call selects a collation the runtime does not have. The locale must be
+ * absent, `undefined`, or an English tag, whose collation is ICU's root
+ * order; the options an object literal whose members are `numeric` (a
+ * boolean literal) and `sensitivity` (a string literal), written without
+ * spreads or computed names. The arguments are literals, so evaluating
+ * them has no effect to keep. */
+function localeCompareFlags(lowerer: Lowerer, nodes: readonly ts.Expression[]): number | null {
+  let flags = LOCALE_COMPARE_DEFAULT;
+  const locales = nodes[1] === undefined ? undefined : withoutParentheses(nodes[1]);
+  if (locales !== undefined) {
+    const absent =
+      ts.isIdentifier(locales) &&
+      locales.text === "undefined" &&
+      (lowerer.typeOf(locales).flags & ts.TypeFlags.Undefined) !== 0;
+    const english =
+      ts.isStringLiteralLike(locales) && /^en(?:-(?:US|GB|CA|AU))?$/.test(locales.text);
+    if (!absent && !english) return null;
+  }
+  const options = nodes[2] === undefined ? undefined : withoutParentheses(nodes[2]);
+  if (options === undefined) return flags;
+  if (!ts.isObjectLiteralExpression(options)) return null;
+  for (const property of options.properties.nodes) {
+    if (!ts.isPropertyAssignment(property) || !ts.isIdentifier(property.name)) return null;
+    const value = withoutParentheses(property.initializer);
+    if (property.name.text === "numeric") {
+      if (value.kind === ts.SyntaxKind.TrueKeyword) flags |= LOCALE_COMPARE_NUMERIC;
+      else if (value.kind === ts.SyntaxKind.FalseKeyword) flags &= ~LOCALE_COMPARE_NUMERIC;
+      else return null;
+    } else if (property.name.text === "sensitivity") {
+      if (!ts.isStringLiteralLike(value)) return null;
+      if (!Object.hasOwn(LOCALE_COMPARE_SENSITIVITY, value.text)) return null;
+      const levels = LOCALE_COMPARE_SENSITIVITY[value.text]!;
+      flags = (flags & LOCALE_COMPARE_NUMERIC) | levels;
+    } else return null;
+  }
+  return flags;
 }
 
 /* ── String.prototype / Number.prototype members beyond the core tables ──
