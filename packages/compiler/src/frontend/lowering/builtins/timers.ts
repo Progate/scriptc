@@ -167,6 +167,25 @@ function isTimeoutTyped(lowerer: Lowerer, node: ts.Expression): boolean {
   return isTimerHandleTyped(lowerer, node, "Timeout");
 }
 
+/** The operand of `(operand as T).name` when `T` declares `name` as an
+ * OPTIONAL member, or null for any other receiver. */
+function assertedTimerHandle(
+  lowerer: Lowerer,
+  access: ts.PropertyAccessExpression,
+): ts.Expression | null {
+  let node: ts.Expression = access.expression;
+  while (ts.isParenthesizedExpression(node)) node = node.expression;
+  if (!ts.isAsExpression(node) && !ts.isTypeAssertion(node)) return null;
+  const member = lowerer.checker.getPropertyOfType(
+    lowerer.checker.getTypeAtLocation(node),
+    access.name.text,
+  );
+  if (member === undefined || (member.flags & ts.SymbolFlags.Optional) === 0) return null;
+  let operand: ts.Expression = node.expression;
+  while (ts.isParenthesizedExpression(operand)) operand = operand.expression;
+  return operand;
+}
+
 /** `t.unref()` / `t.ref()` / `t.hasRef()` on a Timeout handle — loop-
  * liveness bookkeeping over the numeric timer id (the handle is f64).
  * unref/ref return the handle for chaining (Node); hasRef returns a
@@ -182,14 +201,21 @@ export function lowerTimeoutMethodCall(
   // `t?.unref()` receiver guard is real narrowing and stays with the
   // chain machinery.
   if (access.questionDotToken) return null;
-  const isTimeout = isTimeoutTyped(lowerer, access.expression);
-  const isImmediate = !isTimeout && isTimerHandleTyped(lowerer, access.expression, "Immediate");
-  if (!isTimeout && !isImmediate) return null;
-  if (!lowerer.isStdlibMember(access)) return null;
   const name = access.name.text;
+  // `(t as { unref?: () => void }).unref?.()`: a handle viewed through an
+  // assertion that declares the member optional (code that also runs where
+  // timers are numbers). The object is the handle, so the call is the
+  // handle's own method.
+  const asserted = call.questionDotToken ? assertedTimerHandle(lowerer, access) : null;
+  const handleNode = asserted ?? access.expression;
+  const isTimeout = isTimeoutTyped(lowerer, handleNode);
+  const isImmediate = !isTimeout && isTimerHandleTyped(lowerer, handleNode, "Immediate");
+  if (!isTimeout && !isImmediate) return null;
+  if (asserted === null && !lowerer.isStdlibMember(access)) return null;
+  if (asserted !== null && !["unref", "ref", "hasRef", "refresh"].includes(name)) return null;
   const loc = locOf(call);
   if ((name === "unref" || name === "ref") && call.arguments.nodes.length === 0) {
-    const handle = lowerer.lowerExprExpecting(access.expression, F64);
+    const handle = lowerer.lowerExprExpecting(handleNode, F64);
     const fn = isImmediate
       ? name === "unref"
         ? "timers.immediateUnref"
@@ -202,7 +228,7 @@ export function lowerTimeoutMethodCall(
     return { kind: "libCall", fn, args: [handle], type: F64, loc };
   }
   if (name === "hasRef" && call.arguments.nodes.length === 0) {
-    const handle = lowerer.lowerExprExpecting(access.expression, F64);
+    const handle = lowerer.lowerExprExpecting(handleNode, F64);
     const fn = isImmediate ? "timers.immediateHasRef" : "timers.hasRef";
     return { kind: "libCall", fn, args: [handle], type: BOOL, loc };
   }
