@@ -13380,7 +13380,7 @@ function lowerUnionMapClassMethodCall(
     const info = lowerer.classes.get(arm.className) ?? lowerer.flushDeferredClass(arm.className);
     if (!info) return null;
     const found = lowerer.findMethodOn(info, method);
-    if (!found || found.declarer.builtinError || isClassCallback(lowerer, info, method)) return null;
+    if (!found || found.declarer.builtinError) return null;
     if (found.sig.abstract === true && !lowerer.overrideBelow(info, method)) return null;
     const params = found.sig.params;
     if (
@@ -13431,6 +13431,42 @@ function lowerUnionMapClassMethodCall(
   });
   const classCall = (plan: (typeof plans)[number]): IrExpr => {
     const concrete = narrow(plan.arm);
+    // A method the program also reads off a prototype keeps a replaceable
+    // slot: the call goes through the instance's property, as the class's
+    // own calls do.
+    if (isClassCallback(lowerer, plan.info, method)) {
+      const held = lowerer.declareHiddenLocal("%unionMapCallbackReceiver", DYN);
+      const self = varRef(held.id, DYN, loc);
+      const invoked: IrExpr = {
+        kind: "dynCall",
+        callee: {
+          kind: "dynKeyGet",
+          value: self,
+          key: { kind: "strLit", value: method, type: STRING, loc },
+          type: DYN,
+          loc,
+        },
+        receiver: self,
+        calleeName: v8CalleeText(access),
+        args: argRefs.map((arg) => lowerer.coerceToExpected(arg, DYN)),
+        type: DYN,
+        loc,
+      };
+      return {
+        kind: "seqExpr",
+        stmts: [
+          {
+            kind: "varDecl",
+            localId: held.id,
+            init: lowerer.coerceInto(access.expression, concrete, DYN),
+            loc,
+          },
+        ],
+        result: statement ? invoked : lowerer.coerceToExpected(invoked, BOOL),
+        type: statement ? DYN : BOOL,
+        loc,
+      };
+    }
     if (lowerer.overrideBelow(plan.info, method)) {
       lowerer.noteVirtualEdge(plan.info, method);
       return {
