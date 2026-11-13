@@ -1,4 +1,5 @@
 import { InternalCompilerError } from "../errors.js";
+import { isCheckerPanic } from "../diagnostics/diagnostic.js";
 import { keyedHelperName, type KeyedNameOwner } from "./lowering/stable-names.js";
 import { contentDigest, type HeldContents, type JournalTable } from "./lowering/unit-journal.js";
 import { mockCallRecordType, mockContextType } from "./mock-shapes.js";
@@ -3942,7 +3943,8 @@ function mapTypeInner(type: ts.Type, ctx: TypeMapperCtx): IrType | null {
     // FACING surfaces (JSON.stringify, spread, for-of) keep their
     // unit-element fences: no element exists, but the type-directed checks
     // see the unit arm.
-    const args = checker.getTypeArguments(ref);
+    const args = tupleTypeArguments(checker, ref, tupleShape);
+    if (args === null) return null;
     if (args.length === 0) return arrayOf(unitOnlyUnion(unions));
     if (tupleShape?.elementFlags === undefined) return null;
     // A leading-required tuple ending in a rest element whose positions
@@ -8094,7 +8096,8 @@ function restTupleElements(type: ts.Type, ctx: TypeMapperCtx): TupleElement[] | 
     (ref.elementFlags as ts.ElementFlags[] | undefined) !== undefined
       ? ref
       : (ref.getTarget() as ts.TupleType | undefined);
-  const args = checker.getTypeArguments(ref);
+  const args = tupleTypeArguments(checker, ref, tupleShape);
+  if (args === null) return null;
   if (args.length === 0) return [];
   const flags = tupleShape?.elementFlags;
   if (flags === undefined) return null;
@@ -9274,6 +9277,33 @@ export function withUnitArm(
   const arms = [t, unit];
   sortArms(arms);
   return { kind: "union", unionId: unions.intern(arms) };
+}
+
+/** A tuple reference's element types. The tsc-ts checker panics answering
+ * getTypeArguments for a tuple with an empty readonly tuple element
+ * (`[8, []] as const`, "Value is not an instance of 'TupleType'"), while
+ * its own JavaScript build answers it; the element properties ("0", "1",
+ * ...) carry the same types for a tuple of required elements, so that
+ * tuple reads them instead. Null when the panic has no such answer. */
+function tupleTypeArguments(
+  checker: ts.TypeChecker,
+  ref: ts.TupleTypeReference,
+  tupleShape: ts.TupleType | ts.TupleTypeReference | undefined,
+): readonly ts.Type[] | null {
+  try {
+    return checker.getTypeArguments(ref);
+  } catch (error) {
+    if (!isCheckerPanic(error)) throw error;
+    const flags = tupleShape?.elementFlags;
+    if (flags === undefined || flags.some((f) => f !== ts.ElementFlags.Required)) return null;
+    const types: ts.Type[] = [];
+    for (let i = 0; i < flags.length; i++) {
+      const property = checker.getPropertyOfType(ref, String(i));
+      if (property === undefined) return null;
+      types.push(checker.getTypeOfSymbol(property));
+    }
+    return types;
+  }
 }
 
 /** The chalk-shape recognizer behind mapType's hybrid branch: an
