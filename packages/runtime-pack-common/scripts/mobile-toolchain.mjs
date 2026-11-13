@@ -70,5 +70,21 @@ export function mobileRuntimeConfig(name, env = process.env, platform = process.
       minimum_os: "Android 26",
     },
     targetArgs: ["--target=aarch64-linux-android26", "--sysroot", join(toolchain, "sysroot")],
+    // Android 26 has no posix_spawn (bionic adds it at 28), and an app does
+    // not start other processes: child_process has no unit. Node islands
+    // load a native libnode and switch contexts with ucontext, which bionic
+    // does not have.
+    omitRuntimeSources: ["scr_child.c"],
+    omitOptionalSources: [
+      "scr_node_island.c",
+      "scr_node_island_abort.c",
+      "scr_node_island_boot.c",
+      "scr_node_island_child.c",
+      "scr_node_island_events.c",
+      "scr_node_island_export.c",
+      "scr_node_island_gc.c",
+      "scr_node_island_handle.c",
+      "scr_node_island_stdio.c",
+    ],
   };
 }
