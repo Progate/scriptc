@@ -2936,7 +2936,10 @@ export function lowerTupleReadMethodCall(
   }
   const { fnArg, arity } = lowerArrayCallback(lowerer, callback, [elem], receiver.type);
   const ret = fnArg.type.ret;
-  if (ret.kind === "void" || ret.kind === "func") lowerer.badType(call, lowerer.typeOf(call));
+  // A function result is an ordinary array element, as in an array's
+  // `.map`; only `.flatMap` keeps the fence on it.
+  if (ret.kind === "void" || (ret.kind === "func" && method === "flatMap"))
+    lowerer.badType(call, lowerer.typeOf(call));
   if (
     method === "flatMap" &&
     (ret.kind === "dyn" || (ret.kind === "record" && lowerer.shapes.get(ret.shapeId)?.tuple))
